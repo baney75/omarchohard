@@ -29,10 +29,14 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--channel stable|nightly|dev] [--install]
+Usage: install.sh [--channel stable|nightly|dev] [--yes | --install | --no-setup] [-- SETUP FLAGS]
 
   --channel C   release channel to install from (default: stable)
-  --install     also run `omarchohard install` afterward
+                In a terminal, the guided setup runs afterward.
+  --yes         run setup with safe defaults, no questions (for agents)
+  --install     only add the launchers and file handlers afterward
+  --no-setup    only install the omarchohard command
+  -- FLAGS      pass the rest to setup, e.g. -- --onedrive rclone --optimize
 
 Environment: OMARCHOHARD_RELEASE_BASE overrides the release download address.
 EOF
@@ -86,7 +90,8 @@ config_set() {
 }
 
 main() {
-  local channel=stable run_install=0
+  local channel=stable run_install=0 run_setup=auto
+  local -a setup_args=()
   while (($#)); do
     case $1 in
     --channel)
@@ -94,7 +99,18 @@ main() {
       shift
       ;;
     --channel=*) channel=${1#--channel=} ;;
-    --install) run_install=1 ;;
+    --install) run_install=1 run_setup=no ;;
+    --no-setup) run_setup=no ;;
+    --yes | -y)
+      run_setup=yes
+      setup_args+=(--yes)
+      ;;
+    --)
+      shift
+      run_setup=yes
+      setup_args+=("$@")
+      break
+      ;;
     -h | --help)
       usage
       return 0
@@ -167,11 +183,21 @@ main() {
     ;;
   esac
 
-  if ((run_install)); then
+  # A person at a terminal gets the guided setup. curl | bash has no stdin,
+  # so setup reads answers from /dev/tty. Agents and CI pass --yes (setup with
+  # defaults and any setup flags after --) or --install (launchers only).
+  if [[ $run_setup == auto ]]; then
+    run_setup=no
+    [[ -t 1 ]] && { : </dev/tty; } 2>/dev/null && run_setup=yes
+  fi
+  if [[ $run_setup == yes ]]; then
+    "$link" setup "${setup_args[@]}"
+  elif ((run_install)); then
     "$link" install
   else
     say ""
-    say "Next: omarchohard install"
+    say "Next: omarchohard setup   (or open Microsoft 365 Setup from your apps)"
+    say "Agents: omarchohard probe --json, then omarchohard setup --yes --optimize"
   fi
 }
 

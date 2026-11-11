@@ -49,7 +49,7 @@ installed() { "$HOME/.local/bin/omarchohard" "$@"; }
 @test "install.sh installs stable, links the CLI and writes the channel" {
   run bash "$OH_REPO_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  [[ $output == *"Next: omarchohard install"* ]]
+  [[ $output == *"Next: omarchohard setup"* ]]
   [ "$(readlink "$HOME/.local/bin/omarchohard")" = "$DATA/current/bin/omarchohard" ]
   [ "$(readlink "$DATA/current")" = "$DATA/releases/$STABLE" ]
   [ "$(installed version)" = "omarchohard $STABLE" ]
