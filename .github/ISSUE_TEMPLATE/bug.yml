@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in omarchohard does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not paste tokens, cookies or product keys.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. omarchohard install
+        2. xdg-open ~/Downloads/report.docx
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: omarchohard version and channel
+      description: Output of `omarchohard channel`
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: Output of `omarchohard doctor --json`
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Omarchy version, Hyprland version (`hyprctl version`), browser and version
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Launchers or icons
+        - Opening files or links
+        - OneDrive
+        - Sign-in
+        - Updates and channels
+        - Desktop tier (Windows VM)
+        - Other
