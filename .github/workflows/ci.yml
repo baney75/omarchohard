@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (shellcheck, shfmt, actionlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: tests/container/run.sh lint
+
+  test:
+    name: bats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: tests/container/run.sh test
+
+  container:
+    name: Install, launch and package (Arch container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: install.sh over HTTP for each channel
+        run: tests/container/run.sh install
+      - name: Headless sway launch smoke
+        run: tests/container/run.sh launch
+      - name: makepkg, pacman -U, doctor
+        run: tests/container/run.sh package

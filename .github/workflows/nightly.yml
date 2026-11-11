@@ -1,0 +1,75 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if main has not changed since the last nightly
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.compare.outputs.skip }}
+      sha: ${{ steps.compare.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: compare
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          head=$(git rev-parse HEAD)
+          nightly=$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' || true)
+          echo "sha=$head" >>"$GITHUB_OUTPUT"
+          if [ "$head" = "$nightly" ] && [ "$FORCE" != true ]; then
+            echo "main ($head) is already the nightly; skipping"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+      - run: tests/container/run.sh all
+
+  publish:
+    needs: [check, test]
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+      - name: Build nightly
+        run: scripts/build-release.sh nightly dist
+      - name: Replace the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cat dist/omarchohard.version)
+          scripts/publish-rolling.sh nightly dist "Nightly $version" \
+            "Daily build of main at $(git rev-parse --short=7 HEAD) that passed the full test suite. Install: curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash -s -- --channel nightly"

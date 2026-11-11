@@ -1,0 +1,51 @@
+name: Dev build
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    # Only pushes to main in this repository, never pull requests or forks.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Skip if main has moved on
+        id: tip
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" != "$HEAD_SHA" ]; then
+            echo "main moved past $HEAD_SHA; the newer CI run publishes dev"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Build dev
+        if: steps.tip.outputs.skip != 'true'
+        run: scripts/build-release.sh dev dist
+      - name: Replace the dev prerelease
+        if: steps.tip.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cat dist/omarchohard.version)
+          scripts/publish-rolling.sh dev dist "Dev $version" \
+            "Build of main at $(git rev-parse --short=7 HEAD) after CI passed. Install: curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash -s -- --channel dev"
