@@ -40,10 +40,12 @@ oh_run() {
   "$@"
 }
 
-# Start a GUI process detached from this shell (uwsm-app when present, so it
-# lands in its own systemd scope like every other Omarchy launch).
+# Start a GUI process detached from this shell. setsid takes about 2 ms;
+# uwsm-app took 37 to 85 ms (measured 2026-11-11), and most launches only hand
+# the address to a browser that is already running and exit. Set
+# OMARCHOHARD_UWSM=1 to give each new browser its own uwsm scope instead.
 oh_spawn() {
-  if command -v uwsm-app >/dev/null 2>&1 && [[ -z ${OMARCHOHARD_NO_UWSM:-} ]]; then
+  if [[ -n ${OMARCHOHARD_UWSM:-} ]] && command -v uwsm-app >/dev/null 2>&1; then
     set -- uwsm-app -- "$@"
   fi
   if oh_dry; then
@@ -65,7 +67,11 @@ oh_have() { command -v "$1" >/dev/null 2>&1; }
 # Config is plain key=value. It is parsed, never sourced, so a config file can
 # not run code.
 declare -gA OH_CFG=()
+OH_CFG_LOADED=0
+# Loaded once per run; oh_config_set keeps OH_CFG current after that.
 oh_config_load() {
+  ((OH_CFG_LOADED)) && return 0
+  OH_CFG_LOADED=1
   OH_CFG=(
     [channel]=stable
     [browser]=auto
@@ -79,6 +85,8 @@ oh_config_load() {
     [email]=""
     [mail]=1
     [desktop_office]=""
+    [onedrive_cache_size]=20G
+    [apps]=all
   )
   [[ -f $OH_CONFIG ]] || return 0
   local key value

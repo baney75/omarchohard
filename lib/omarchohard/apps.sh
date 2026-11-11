@@ -19,11 +19,23 @@ declare -gA OH_EXT_APP=(
   [one]=onenote
 )
 
-oh_app_ids() { cut -d'|' -f1 <<<"$OH_APPS_TABLE"; }
+# Lookups run on every launch and double-click, so they stay in bash: no
+# awk or cut process per field.
+oh_app_ids() {
+  local line
+  while IFS= read -r line; do printf '%s\n' "${line%%|*}"; done <<<"$OH_APPS_TABLE"
+}
 
 oh_app_field() {
-  local id=$1 n=$2
-  awk -F'|' -v id="$id" -v n="$n" '$1 == id { print $n; found = 1 } END { exit !found }' <<<"$OH_APPS_TABLE"
+  local id=$1 n=$2 line
+  local -a f
+  while IFS= read -r line; do
+    [[ ${line%%|*} == "$id" ]] || continue
+    IFS='|' read -r -a f <<<"$line"
+    printf '%s\n' "${f[n - 1]:-}"
+    return 0
+  done <<<"$OH_APPS_TABLE"
+  return 1
 }
 
 oh_app_exists() { oh_app_field "$1" 1 >/dev/null; }
@@ -46,4 +58,36 @@ oh_app_for_file() {
   ext=${ext,,}
   [[ $file == *.* && -n ${OH_EXT_APP[$ext]:-} ]] || return 1
   printf '%s\n' "${OH_EXT_APP[$ext]}"
+}
+
+# The apps the user chose (config `apps`: "all" or a comma list). Microsoft 365
+# home is always kept, as it is the way to every other app and to Copilot.
+oh_enabled_apps() {
+  local want id
+  want=,$(oh_config_get apps),
+  want=${want// /}
+  for id in $(oh_app_ids); do
+    [[ $want == ,all, || $want == ,, || $want == *",$id,"* || $id == m365 ]] && printf '%s\n' "$id"
+  done
+  return 0
+}
+
+oh_app_enabled() { oh_enabled_apps | grep -qxF -- "$1"; }
+
+# Normalize a user list ("Teams, word") to known ids in table order; "all"
+# stays "all". Callers check the status, as oh_die in $(...) only ends the subshell.
+oh_apps_parse() {
+  local raw=${1,,} id out=''
+  raw=${raw// /}
+  if [[ $raw == all || -z $raw ]]; then
+    echo all
+    return 0
+  fi
+  for id in ${raw//,/ }; do
+    oh_app_require "$id" || return 1
+  done
+  for id in $(oh_app_ids); do
+    [[ ,$raw, == *",$id,"* ]] && out+=${out:+,}$id
+  done
+  printf '%s\n' "$out"
 }

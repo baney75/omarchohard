@@ -27,6 +27,21 @@ oh_browser_bin() {
     printf '%s\n' "$bin"
     return 0
   fi
+  # xdg-settings takes about 35 ms, so the answer is cached until the user's
+  # mimeapps.list (where the default browser lives) changes.
+  local cache=$OH_STATE_DIR/browser.cache list
+  list=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
+  if [[ -s $cache && ! $list -nt $cache ]]; then
+    read -r bin <"$cache"
+    [[ -x $bin ]] && printf '%s\n' "$bin" && return 0
+  fi
+  bin=$(oh_browser_resolve) || return 1
+  mkdir -p "$OH_STATE_DIR" && printf '%s\n' "$bin" >"$cache" 2>/dev/null || true
+  printf '%s\n' "$bin"
+}
+
+oh_browser_resolve() {
+  local default bin candidate
   default=$(xdg-settings get default-web-browser 2>/dev/null || true)
   if [[ $default =~ ^($OH_CHROMIUM_FAMILY) ]] && bin=$(oh_desktop_exec_bin "$default") && [[ -n $bin ]]; then
     command -v "$bin" 2>/dev/null && return 0
@@ -167,4 +182,19 @@ EOF
     ;;
   *) oh_die "usage: omarchohard prewarm on|off|status" ;;
   esac
+}
+
+# Office Add-ins. The web apps run the same JavaScript add-ins as Office on
+# Windows and Mac (Grammarly, Zotero, Mendeley, Adobe and others from the
+# store), so they install from inside each app. COM and VSTO add-ins are
+# Windows-only and need the desktop tier.
+oh_addins() {
+  oh_config_load
+  local app=${1:-word}
+  oh_app_require "$app"
+  oh_say "In $(oh_app_name "$app"), choose Home, then Add-ins, to search the store and add one."
+  oh_say "Add-ins follow your Microsoft account, so one added on Windows shows up here too."
+  oh_say "Browser extensions from your browser work in these windows as well (shared profile)."
+  oh_say "COM and VSTO add-ins are Windows-only; they run in desktop Office: omarchohard desktop check"
+  oh_launch "$app"
 }
