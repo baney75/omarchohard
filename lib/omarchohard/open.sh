@@ -114,25 +114,10 @@ oh_open_file() {
 # Copy a file from outside OneDrive into OneDrive/Omarchohard, wait for it to
 # upload, then open it. The original is never changed.
 oh_open_copy() {
-  local app=$1 abs=$2 root=$3 dir name stem ext dest web n=1
+  local app=$1 abs=$2 root=$3 rel web
   oh_onedrive_web_url x >/dev/null || oh_die "set your OneDrive web address first: omarchohard onedrive web-root URL"
-  dir=$root/Omarchohard
-  name=$(basename -- "$abs")
-  stem=${name%.*}
-  ext=${name##*.}
-  dest=$dir/$name
-  if oh_dry; then
-    printf 'would copy: %s -> %s\n' "$abs" "$dest"
-  else
-    mkdir -p "$dir"
-    while [[ -e $dest ]] && ! cmp -s -- "$abs" "$dest"; do
-      dest="$dir/$stem ($n).$ext"
-      n=$((n + 1))
-    done
-    [[ -e $dest ]] || cp -- "$abs" "$dest"
-    oh_onedrive_wait_uploaded "${dest#"$root"/}"
-  fi
-  web=$(oh_onedrive_web_url "${dest#"$root"/}")
-  oh_notify "Opened a copy in OneDrive" "Edits save to OneDrive/Omarchohard/${dest##*/}. Your original is unchanged."
+  rel=$(oh_onedrive_import "$abs" "$root")
+  web=$(oh_onedrive_web_url "$rel")
+  oh_notify "Opened a copy in OneDrive" "Edits save to OneDrive/$rel. Your original is unchanged."
   oh_app_window "$web" 0
 }

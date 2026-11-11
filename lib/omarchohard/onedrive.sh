@@ -25,14 +25,50 @@ oh_onedrive_web_url() {
 }
 
 # Wait (up to 60 s) until a file under the OneDrive folder exists remotely.
+# The rclone mount answers on a private socket in the user's runtime dir
+# (mode 0700), so status can show the live upload queue.
+oh_onedrive_rc() {
+  local sock=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchohard-rclone.sock
+  [[ -S $sock ]] && oh_have rclone || return 1
+  rclone rc --unix-socket "$sock" "$@" 2>/dev/null
+}
+
+# "in progress queued", or nothing when the mount is not answering.
+oh_onedrive_queue() {
+  local stats
+  stats=$(oh_onedrive_rc vfs/stats) || return 1
+  jq -r '"\(.diskCache.uploadsInProgress // 0) \(.diskCache.uploadsQueued // 0)"' <<<"$stats" 2>/dev/null
+}
+
+# Pull remote changes now and wait for local saves to finish uploading.
+oh_onedrive_sync_now() {
+  local q i
+  case $(oh_config_get onedrive_client) in
+  rclone)
+    oh_onedrive_rc vfs/refresh recursive=true >/dev/null || oh_die "the OneDrive mount is not running: omarchohard onedrive start"
+    for ((i = 0; i < 120; i++)); do
+      q=$(oh_onedrive_queue) || break
+      [[ $q == "0 0" ]] && break
+      ((i % 5)) || oh_say "uploading: ${q% *} in progress, ${q#* } queued"
+      sleep 1
+    done
+    oh_ok "OneDrive is in sync"
+    ;;
+  abraunegg) oh_run onedrive --sync && oh_ok "OneDrive is in sync" ;;
+  *) oh_die "OneDrive is not set up: omarchohard onedrive setup" ;;
+  esac
+}
+
 oh_onedrive_wait_uploaded() {
-  local rel=$1 remote i
+  local rel=$1 remote i q
   remote=$(oh_config_get onedrive_remote)
   case $(oh_config_get onedrive_client) in
   rclone)
     oh_have rclone || return 0
     for ((i = 0; i < 60; i++)); do
-      rclone lsf --files-only "$remote:$rel" >/dev/null 2>&1 && return 0
+      # Uploaded once the queue is empty (when the mount answers) and the file is listed.
+      q=$(oh_onedrive_queue) || q="0 0"
+      [[ $q == "0 0" ]] && rclone lsf --files-only "$remote:$rel" >/dev/null 2>&1 && return 0
       sleep 1
     done
     oh_warn "OneDrive has not confirmed the upload yet; the document may take a moment to appear"
@@ -62,8 +98,10 @@ oh_onedrive_set_web_root() {
 }
 
 oh_onedrive_rclone_unit() {
-  local dir=$1 remote=$2 rclone_bin fusermount
+  local dir=$1 remote=$2 rclone_bin fusermount cache
   rclone_bin=$(command -v rclone)
+  cache=$(oh_config_get onedrive_cache_size)
+  [[ $cache =~ ^[0-9]+[MG]$ ]] || cache=20G
   fusermount=$(command -v fusermount3 || command -v fusermount || echo fusermount3)
   mkdir -p "$OH_UNIT_DIR"
   cat >"$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT" <<EOF
@@ -75,7 +113,8 @@ Wants=network-online.target
 [Service]
 Type=notify
 ExecStartPre=/usr/bin/mkdir -p $dir
-ExecStart=$rclone_bin mount $remote: $dir --vfs-cache-mode full --vfs-cache-max-age 8760h --vfs-cache-max-size 20G --vfs-write-back 2s --dir-cache-time 30s --poll-interval 30s --vfs-fast-fingerprint
+ExecStartPre=/usr/bin/rm -f %t/omarchohard-rclone.sock
+ExecStart=$rclone_bin mount $remote: $dir --vfs-cache-mode full --vfs-cache-max-age 8760h --vfs-cache-max-size $cache --vfs-cache-min-free-space 2G --vfs-write-back 2s --vfs-read-ahead 16M --buffer-size 16M --transfers 8 --dir-cache-time 30s --poll-interval 30s --vfs-fast-fingerprint --rc --rc-addr unix://%t/omarchohard-rclone.sock --rc-no-auth
 ExecStop=$fusermount -uz $dir
 Restart=on-failure
 RestartSec=10
@@ -196,6 +235,12 @@ oh_onedrive_status() {
   printf 'service:  %s\n' "$(systemctl --user is-active "$OH_ONEDRIVE_UNIT" 2>/dev/null || echo inactive)"
   if [[ $client == rclone ]]; then
     printf 'mounted:  %s\n' "$(mountpoint -q "$dir" 2>/dev/null && echo yes || echo no)"
+    local q
+    if q=$(oh_onedrive_queue) && [[ -n $q ]]; then
+      if [[ $q == "0 0" ]]; then printf 'sync:     up to date (saves upload after 2 s, changes from other devices appear within 30 s)\n'; else
+        printf 'sync:     %s uploading, %s queued\n' "${q% *}" "${q#* }"
+      fi
+    fi
   fi
   printf 'web root: %s\n' "${web:-not set (omarchohard onedrive web-root URL)}"
 }
@@ -209,9 +254,10 @@ oh_onedrive() {
   status) oh_onedrive_status ;;
   web-root) oh_onedrive_set_web_root "${1:?usage: omarchohard onedrive web-root URL}" ;;
   guess) oh_onedrive_guess_root "${1:?usage: omarchohard onedrive guess you@school.edu}" ;;
+  sync) oh_onedrive_sync_now ;;
   start) oh_run systemctl --user start "$OH_ONEDRIVE_UNIT" ;;
   stop) oh_run systemctl --user stop "$OH_ONEDRIVE_UNIT" ;;
   remove) oh_onedrive_remove "$@" ;;
-  *) oh_die "usage: omarchohard onedrive setup|status|web-root|start|stop|remove" ;;
+  *) oh_die "usage: omarchohard onedrive setup|status|sync|web-root|start|stop|remove" ;;
   esac
 }
