@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# omarchohard: Microsoft 365 on Omarchy (Arch + Hyprland).
+# https://github.com/baney75/omarchohard
+set -euo pipefail
+
+OH_SELF=$(readlink -f "${BASH_SOURCE[0]}")
+OH_ROOT=${OMARCHOHARD_ROOT:-$(dirname "$(dirname "$OH_SELF")")}
+OH_LIB=$OH_ROOT/lib/omarchohard
+OH_SHARE=$OH_ROOT/share/omarchohard
+
+for module in common apps browser integrate open onedrive release doctor desktop; do
+  # shellcheck source=/dev/null
+  source "$OH_LIB/$module.sh"
+done
+
+usage() {
+  cat <<EOF
+omarchohard $(oh_version) - Microsoft 365 on Omarchy
+
+Usage: omarchohard <command> [options]
+
+Everyday
+  install [--isolated] [--no-mail] [--prewarm]
+                         Add Word, Excel, PowerPoint, Outlook, OneNote, Teams
+                         and OneDrive to the launcher and set file handlers
+  login [--email ADDR]   Open the Microsoft sign-in page once (SSO)
+  launch APP [URL]       Open or focus an app (word, excel, powerpoint,
+                         outlook, onenote, teams, onedrive, m365)
+  open FILE|URL          Open a document in the right app
+  doctor [--json]        Check every launcher, handler and service
+  uninstall [--purge]    Remove everything install added and restore handlers
+
+Files and sync
+  onedrive setup [--client rclone|abraunegg] [--dir DIR]
+  onedrive status | web-root URL | start | stop | remove
+
+Speed
+  prewarm on|off|status  Keep the browser resident so apps open in ~0.2 s
+
+Desktop Office (experimental, needs a Windows VM)
+  desktop check | install | up | down | apps | activate [--key-file F] | remove
+
+Releases
+  channel [stable|nightly|dev]   Show or switch the release channel
+  update [--check]               Update to the newest build on the channel
+  version
+
+Environment: OMARCHOHARD_DRY_RUN=1 prints commands instead of running them.
+EOF
+}
+
+main() {
+  local cmd=${1:-help}
+  (($#)) && shift
+  case $cmd in
+  install) oh_install "$@" ;;
+  uninstall) oh_uninstall "$@" ;;
+  login) oh_login "$@" ;;
+  launch) oh_launch "$@" ;;
+  open) oh_open "$@" ;;
+  doctor) oh_doctor "$@" ;;
+  onedrive) oh_onedrive "$@" ;;
+  prewarm) oh_prewarm "$@" ;;
+  desktop) oh_desktop "$@" ;;
+  channel) oh_channel "$@" ;;
+  update) oh_update "$@" ;;
+  version | --version | -V) echo "omarchohard $(oh_version)" ;;
+  help | --help | -h) usage ;;
+  *)
+    oh_err "unknown command: $cmd"
+    usage >&2
+    exit 2
+    ;;
+  esac
+}
+
+main "$@"
