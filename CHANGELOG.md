@@ -14,7 +14,7 @@ builds are not listed; they carry the version of the next release plus a
 
 - `omarchohard install`: Word, Excel, PowerPoint, Outlook, OneNote, Teams,
   OneDrive and a Microsoft 365 home launcher as Chromium app windows, with
-  desktop entries, icons, file handlers (.docx, .xlsx, .pptx and 17 related
+  desktop entries, icons, file handlers (.docx, .xlsx, .pptx and 16 related
   types) and URL handlers (mailto, msteams, ms-word, ms-excel, ms-powerpoint,
   onenote). `--isolated` uses a dedicated browser profile; `--no-mail` leaves
   mailto alone.
