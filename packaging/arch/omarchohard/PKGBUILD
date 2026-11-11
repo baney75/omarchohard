@@ -1,0 +1,36 @@
+# Maintainer: Donovan Baney (https://github.com/baney75)
+#
+# Stable package, built from the GitHub tag tarball. To bump after tagging
+# vX.Y.Z: set pkgver, reset pkgrel=1, replace 'SKIP' with the tarball's
+# sha256 (updpkgsums), then run makepkg --printsrcinfo >.SRCINFO.
+pkgname=omarchohard
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Microsoft 365 web apps as desktop apps on Omarchy (Arch + Hyprland)'
+arch=('any')
+url='https://github.com/baney75/omarchohard'
+license=('MIT')
+depends=('bash' 'curl' 'jq' 'xdg-utils' 'desktop-file-utils')
+optdepends=(
+  'chromium: app windows (any Chromium-family browser works)'
+  'rclone: OneDrive on disk (default client)'
+  'fuse3: rclone mount'
+  'onedrive-abraunegg: OneDrive two-way sync client'
+  'freerdp: desktop tier (WinApps RemoteApp windows)'
+  'docker: desktop tier (Windows VM)'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# SKIP until the v0.1.0 tag exists; see the bump steps above.
+sha256sums=('SKIP')
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 bin/omarchohard "$pkgdir/usr/bin/omarchohard"
+  install -d "$pkgdir/usr/lib/omarchohard" "$pkgdir/usr/share/omarchohard"
+  cp -r --no-preserve=ownership lib/omarchohard/. "$pkgdir/usr/lib/omarchohard/"
+  cp -r --no-preserve=ownership share/omarchohard/. "$pkgdir/usr/share/omarchohard/"
+  install -Dm644 VERSION "$pkgdir/usr/share/omarchohard/VERSION"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 docs/*.md -t "$pkgdir/usr/share/doc/$pkgname/docs/"
+}
