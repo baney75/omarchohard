@@ -76,8 +76,9 @@ config_set() {
   mkdir -p "$dir"
   tmp=$(mktemp "$dir/.config.XXXXXX")
   if [[ -f $file ]]; then
-    grep -v -E "^[[:space:]]*$key[[:space:]]*=" "$file" >"$tmp" || true
+    grep -v -E "^[[:space:]]*${key}[[:space:]]*=" "$file" >"$tmp" || true
   else
+    # shellcheck disable=SC2016 # literal backticks in the header comment
     printf '# omarchohard config. Edit with care; see `omarchohard help`.\n' >"$tmp"
   fi
   printf '%s=%s\n' "$key" "$value" >>"$tmp"
@@ -160,7 +161,10 @@ main() {
 
   case ":$PATH:" in
   *":$bindir:"*) ;;
-  *) warn "$bindir is not on your PATH. Add it: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >>~/.bashrc" ;;
+  *)
+    # shellcheck disable=SC2016 # print $HOME and $PATH literally
+    warn "$bindir is not on your PATH. Add it: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >>~/.bashrc"
+    ;;
   esac
 
   if ((run_install)); then

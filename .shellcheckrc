@@ -1,0 +1,2 @@
+# `A && B || C` is used on purpose where B always succeeds (oh_doc, oh_ok).
+disable=SC2015
