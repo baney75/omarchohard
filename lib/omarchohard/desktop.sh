@@ -20,7 +20,7 @@ OH_WINAPPS_CONF=${XDG_CONFIG_HOME:-$HOME/.config}/winapps/winapps.conf
 
 declare -gA OH_OFFICE_PRODUCT=(
   [m365]=O365ProPlusRetail
-  [m365-home]=O365HomePremRetail
+  ["m365-home"]=O365HomePremRetail
   [2024]=ProPlus2024Retail
   [home2024]=HomeStudent2024Retail
   [2021]=ProPlus2021Retail
@@ -165,6 +165,7 @@ EOF
   cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_VM_DIR/oem/"
   printf '%s\n' "${OH_OFFICE_PRODUCT[$office]}" >"$OH_VM_DIR/oem/office-product.txt"
   [[ $OH_VM_INBOX == "$HOME"/* ]] || oh_die "the VM inbox must be under your home folder (it is shared with the VM)"
+  # shellcheck disable=SC1003 # '\\' is one backslash to tr
   printf '%s\n' "${OH_VM_INBOX#"$HOME"/}" | tr '/' '\\' >"$OH_VM_DIR/oem/inbox-path.txt"
   sed -e "s|@VERSION@|$windows|" -e "s|@RAM@|$ram|" -e "s|@USER@|$user|" -e "s|@PASS@|$pass|" \
     "$OH_SHARE/vm/compose.yaml.in" >"$OH_VM_DIR/compose.yaml"

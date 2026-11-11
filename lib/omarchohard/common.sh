@@ -104,8 +104,9 @@ oh_config_set() {
   mkdir -p "$OH_CONFIG_DIR"
   tmp=$(mktemp "$OH_CONFIG_DIR/.config.XXXXXX")
   if [[ -f $OH_CONFIG ]]; then
-    grep -v -E "^[[:space:]]*$key[[:space:]]*=" "$OH_CONFIG" >"$tmp" || true
+    grep -v -E "^[[:space:]]*${key}[[:space:]]*=" "$OH_CONFIG" >"$tmp" || true
   else
+    # shellcheck disable=SC2016 # literal backticks in the header comment
     printf '# omarchohard config. Edit with care; see `omarchohard help`.\n' >"$tmp"
   fi
   printf '%s=%s\n' "$key" "$value" >>"$tmp"
