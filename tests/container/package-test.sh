@@ -48,8 +48,11 @@ check_installed() {
     printf 'browser=chromium\n' >"$HOME/.config/omarchohard/config"
     omarchohard install >/dev/null 2>&1 || fail "omarchohard install"
     omarchohard doctor || fail "doctor in the pacman layout"
-    grep -q '^Exec=/usr/bin/omarchohard open --app word' "$HOME/.local/share/applications/omarchohard-word.desktop" ||
-      fail "Exec does not use /usr/bin/omarchohard"
+    # Exec may name /usr/sbin or /bin when PATH lists them first; on Arch both
+    # are symlinks to /usr/bin.
+    exec_bin=$(sed -n 's/^Exec=\([^ ]*\) open --app word.*/\1/p' "$HOME/.local/share/applications/omarchohard-word.desktop")
+    [[ -x $exec_bin && $(readlink -f "$exec_bin") == /usr/bin/omarchohard ]] ||
+      fail "Exec is '$exec_bin', not the packaged /usr/bin/omarchohard"
     omarchohard update 2>&1 | grep -q 'installed by a package manager' || fail "update did not defer to pacman"
     omarchohard uninstall >/dev/null 2>&1
   )
