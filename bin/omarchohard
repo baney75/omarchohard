@@ -8,7 +8,7 @@ OH_ROOT=${OMARCHOHARD_ROOT:-$(dirname "$(dirname "$OH_SELF")")}
 OH_LIB=$OH_ROOT/lib/omarchohard
 OH_SHARE=$OH_ROOT/share/omarchohard
 
-for module in common apps browser integrate open onedrive release doctor desktop; do
+for module in common apps browser integrate open onedrive release doctor desktop setup agent share; do
   # shellcheck source=/dev/null
   source "$OH_LIB/$module.sh"
 done
@@ -19,8 +19,14 @@ omarchohard $(oh_version) - Microsoft 365 on Omarchy
 
 Usage: omarchohard <command> [options]
 
+Start here
+  setup                  Guided setup: browser, sign-in, OneDrive, check.
+                         Agents: setup --yes [--browser B] [--shared|--isolated]
+                         [--email E] [--no-mail] [--apps LIST] [--onedrive rclone|abraunegg|none]
+                         [--prewarm on|off] [--optimize]
+
 Everyday
-  install [--isolated] [--no-mail] [--prewarm]
+  install [--isolated] [--no-mail] [--prewarm] [--apps word,excel,teams|all]
                          Add Word, Excel, PowerPoint, Outlook, OneNote, Teams
                          and OneDrive to the launcher and set file handlers
   login [--email ADDR]   Open the Microsoft sign-in page once (SSO)
@@ -28,13 +34,19 @@ Everyday
                          outlook, onenote, teams, onedrive, m365)
   open FILE|URL          Open a document in the right app
   doctor [--json]        Check every launcher, handler and service
+  share [--link] FILE    Share through OneDrive (also in Files: right-click, Scripts)
+  add APP... | remove APP...
+                         Choose which apps are installed (teams, onenote, ...)
+  addins [APP]           Find Office Add-ins (they work in the web apps)
   uninstall [--purge]    Remove everything install added and restore handlers
 
 Files and sync
   onedrive setup [--client rclone|abraunegg] [--dir DIR]
-  onedrive status | web-root URL | start | stop | remove
+  onedrive status | sync | web-root URL | start | stop | remove
 
-Speed
+Speed and agents
+  probe [--json]         What this device has and what omarchohard recommends
+  optimize [--apply]     Tune cache size and prewarm for this device
   prewarm on|off|status  Keep the browser resident so apps open in ~0.2 s
 
 Desktop Office (experimental, needs a Windows VM)
@@ -53,6 +65,13 @@ main() {
   local cmd=${1:-help}
   (($#)) && shift
   case $cmd in
+  setup) oh_setup "$@" ;;
+  probe) oh_probe "$@" ;;
+  optimize) oh_optimize "$@" ;;
+  addins | add-ins) oh_addins "$@" ;;
+  share) oh_share "$@" ;;
+  add) oh_apps_change add "$@" ;;
+  remove) oh_apps_change remove "$@" ;;
   install) oh_install "$@" ;;
   uninstall) oh_uninstall "$@" ;;
   login) oh_login "$@" ;;

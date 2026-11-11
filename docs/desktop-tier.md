@@ -45,7 +45,7 @@ omarchohard desktop install --windows 11 --office 2024
 | Option | Values | Default |
 | --- | --- | --- |
 | `--windows` | `11e`: Windows 11 Enterprise, free 90-day evaluation. `11`: Windows 11, activate with your own license. (`10e` and `10` also work.) | `11e` |
-| `--office` | `m365` (Microsoft 365 Apps for enterprise, for school and work accounts), `m365-home` (Microsoft 365 Personal or Family), `2024` (Office Professional Plus 2024, ODT id `ProPlus2024Retail`), `home2024` (Office Home 2024, ODT id `HomeStudent2024Retail`, not yet confirmed against Microsoft's product list), `2021` (Office Professional Plus 2021) | `m365` |
+| `--office` | `m365` (Microsoft 365 Apps for enterprise, for school and work accounts), `m365-home` (Microsoft 365 Personal or Family), `2024` (Office Professional Plus 2024, ODT id `ProPlus2024Retail`), `home2024` (Office Home 2024, ODT id `Home2024Retail`), `homebusiness2024` (Office Home & Business 2024, ODT id `HomeBusiness2024Retail`), `2021` (Office Professional Plus 2021) | `m365` |
 | `--ram` | VM memory, such as `4G` or `6G` | `4G` |
 
 Windows installs itself in 20 to 40 minutes; watch it at

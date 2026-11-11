@@ -50,7 +50,7 @@ xdg-open file.docx
      elsewhere?        -> copy to OneDrive/Omarchohard, wait for upload, open the copy
      desktop tier on?  -> winapps word-o365 file.docx
   -> Hyprland window with that class open?  focus it
-     otherwise  browser --app=URL (through uwsm-app when present)
+     otherwise  browser --app=URL, detached with setsid (uwsm-app only with OMARCHOHARD_UWSM=1, as it adds 40 to 80 ms)
 ```
 
 ## Tests

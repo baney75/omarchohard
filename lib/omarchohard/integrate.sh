@@ -5,14 +5,16 @@ OH_MANIFEST=$OH_STATE_DIR/manifest
 
 # A stable path for Exec= lines: the PATH entry when it points at this copy,
 # so an update that swaps the release directory keeps launchers working.
+# The installer's link counts even when ~/.local/bin is not on PATH.
 oh_bin_path() {
-  local onpath
-  onpath=$(command -v omarchohard 2>/dev/null || true)
-  if [[ -n $onpath && $(readlink -f "$onpath") == "$OH_SELF" ]]; then
-    printf '%s\n' "$onpath"
-  else
-    printf '%s\n' "$OH_SELF"
-  fi
+  local candidate
+  for candidate in "$(command -v omarchohard 2>/dev/null || true)" "$HOME/.local/bin/omarchohard"; do
+    if [[ -n $candidate && $(readlink -f "$candidate") == "$OH_SELF" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' "$OH_SELF"
 }
 
 oh_manifest_add() {
@@ -97,6 +99,58 @@ oh_mimeapps_user_default() {
   ' "$list"
 }
 
+# Hand one app's types back: drop its desktop id from mimeapps.list and put
+# back the handlers saved for those types.
+oh_mime_release() {
+  local id=$1 list tmp mime previous types
+  list=$(oh_mimeapps_file)
+  if [[ -f $list ]] && grep -qF "omarchohard-$id.desktop" "$list"; then
+    tmp=$(mktemp "${list%/*}/.mimeapps.XXXXXX")
+    sed -E "s/omarchohard-$id\.desktop;?//g" "$list" | grep -v -E '^[^=[]+=$' >"$tmp" || true
+    mv "$tmp" "$list"
+  fi
+  [[ -f $OH_MIME_BACKUP ]] || return 0
+  types=";$(oh_app_mimes "$id");"
+  for mime in $(oh_app_schemes "$id" | tr ';' ' '); do types+="x-scheme-handler/$mime;"; done
+  while IFS=$'\t' read -r mime previous; do
+    [[ -n $mime && -n $previous && $types == *";$mime;"* ]] || continue
+    xdg-mime default "$previous" "$mime" 2>/dev/null || true
+  done <"$OH_MIME_BACKUP"
+}
+
+# Take an app off this machine: launcher, icon and file types.
+oh_app_uninstall() {
+  local id=$1 file icon
+  file=$OH_APPS_DIR/$(oh_app_desktop_id "$id")
+  icon=$OH_ICON_DIR/scalable/apps/omarchohard-$id.svg
+  [[ -e $file || -e $icon ]] || return 0
+  rm -f -- "$file" "$icon"
+  oh_mime_release "$id"
+  oh_dim "removed $(oh_app_name "$id")"
+}
+
+# omarchohard add APP... | remove APP...
+oh_apps_change() {
+  oh_config_load
+  local verb=$1 id cur new=''
+  shift
+  (($#)) || oh_die "usage: omarchohard $verb APP...   (apps: $(oh_app_ids | grep -vx m365 | tr '\n' ' '))"
+  cur=$(oh_enabled_apps | tr '\n' ' ')
+  for id in "$@"; do
+    id=${id,,}
+    oh_app_require "$id"
+    [[ $verb == remove && $id == m365 ]] && oh_die "Microsoft 365 home stays; it opens every other app"
+  done
+  for id in $(oh_app_ids); do
+    case $verb in
+    add) [[ " $cur " == *" $id "* || " ${*,,} " == *" $id "* ]] && new+=${new:+,}$id ;;
+    remove) [[ " $cur " == *" $id "* && " ${*,,} " != *" $id "* ]] && new+=${new:+,}$id ;;
+    esac
+  done
+  [[ $new == "$(oh_app_ids | paste -sd, -)" ]] && new=all
+  oh_install --apps "$new"
+}
+
 # Strip every omarchohard-*.desktop reference from mimeapps.list and drop
 # keys left empty, then put back the handlers we saved.
 oh_mime_restore() {
@@ -117,7 +171,7 @@ oh_mime_restore() {
 
 oh_install() {
   oh_config_load
-  local isolated=0 mail prewarm=0 bin id mimes schemes scheme
+  local isolated=0 mail prewarm=0 bin id mimes schemes scheme apps=
   mail=$(oh_config_get mail)
   [[ $mail == 0 ]] || mail=1
   local -a claim
@@ -126,6 +180,12 @@ oh_install() {
     --isolated) isolated=1 ;;
     --no-mail) mail=0 ;;
     --prewarm) prewarm=1 ;;
+    --apps)
+      [[ -n ${2:-} ]] || oh_die "--apps needs a list, like word,excel,teams or all"
+      apps=$(oh_apps_parse "$2") || exit 1
+      shift
+      ;;
+    --apps=*) apps=$(oh_apps_parse "${1#--apps=}") || exit 1 ;;
     --desktop)
       oh_desktop install
       return
@@ -137,11 +197,15 @@ oh_install() {
   oh_have xdg-mime || oh_die "xdg-mime is missing. Install xdg-utils: omarchy pkg add xdg-utils"
   oh_browser_bin >/dev/null || oh_die "no Chromium-based browser found. Install one: omarchy pkg add chromium"
   ((isolated)) && oh_config_set profile isolated
+  [[ -n $apps ]] && oh_config_set apps "$apps"
   [[ $(oh_config_get mail) == "$mail" ]] || oh_config_set mail "$mail"
   [[ -f $OH_CONFIG ]] || oh_config_set channel "$(oh_config_get channel)"
 
   bin=$(oh_bin_path)
   for id in $(oh_app_ids); do
+    oh_app_enabled "$id" || oh_app_uninstall "$id"
+  done
+  for id in $(oh_enabled_apps); do
     oh_icon_install "$id"
     oh_desktop_entry_write "$id" "$bin"
     mimes=$(oh_app_mimes "$id")
@@ -155,6 +219,8 @@ oh_install() {
     ((${#claim[@]})) && oh_mime_claim "$id" "${claim[@]}"
     oh_ok "$(oh_app_name "$id")"
   done
+  oh_setup_entry_write "$bin"
+  oh_nautilus_scripts_write "$bin"
   oh_refresh_desktop_db
   ((prewarm)) && oh_prewarm on
   oh_say ""

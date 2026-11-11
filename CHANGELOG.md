@@ -36,6 +36,24 @@ builds are not listed; they carry the version of the next release plus a
   `omarchohard-git`).
 - Experimental desktop tier: real Microsoft Office in a Windows VM through
   WinApps and dockur/windows, with product-key activation through a VM inbox.
+  Office Home 2024 (`Home2024Retail`) and Home & Business 2024
+  (`HomeBusiness2024Retail`) are supported editions.
+- `omarchohard setup`: a five-step guided setup (browser, account, apps,
+  sign-in, OneDrive) that the one-line installer starts from a terminal, and
+  a Microsoft 365 Setup launcher that opens it in a floating terminal.
+  `--yes` and answer flags run it with no questions.
+- `omarchohard probe [--json]` and `optimize [--apply]`: what this device has,
+  what omarchohard recommends for it, and applying it (cache size, prewarm).
+- `omarchohard share [--link] [--edit] [--anyone|--org]`: share by name in the
+  app, or copy a OneDrive link; Files right-click scripts for the same.
+- `omarchohard add` and `remove`, and `install --apps`, to choose which apps
+  are installed, Teams included.
+- `omarchohard onedrive sync` and a live upload queue in `onedrive status`,
+  through the rclone mount's private control socket.
+- `omarchohard addins`: where Office Add-ins live in the web apps.
+- Faster launches: app lookups stay in bash, the browser is cached until your
+  default changes, and apps start with setsid rather than uwsm-app.
+  `open --app word` takes 18 ms before the browser starts.
 
 [Unreleased]: https://github.com/baney75/omarchohard/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/baney75/omarchohard/releases/tag/v0.1.0

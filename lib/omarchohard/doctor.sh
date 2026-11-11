@@ -61,7 +61,12 @@ oh_doctor_app() {
       return
     fi
   done
-  oh_doc ok "$name" "${#want[@]} handlers"
+  local n=${#want[@]}
+  if ((n == 0)); then
+    oh_doc ok "$name" "launcher"
+  else
+    oh_doc ok "$name" "$n file and link type$( ((n == 1)) || echo s)"
+  fi
 }
 
 oh_doctor() {
@@ -81,7 +86,7 @@ oh_doctor() {
     oh_doc fail "channel" "unknown channel '$(oh_config_get channel)'"
 
   # Apps, launchers, icons, handlers.
-  for id in $(oh_app_ids); do
+  for id in $(oh_enabled_apps); do
     oh_doctor_app "$id"
   done
 

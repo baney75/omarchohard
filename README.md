@@ -8,8 +8,11 @@ Teams meeting links.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash
-omarchohard install
 ```
+
+Run from a terminal, that one line installs the CLI and starts a short guided
+setup. It picks your browser, lets you choose apps, signs you in, sets up
+OneDrive and runs a check.
 
 ## What it is
 
@@ -23,6 +26,10 @@ omarchohard install
   that window.
 - OneDrive on disk, so files open from the Files app, through an rclone mount
   (default) or the abraunegg `onedrive` client.
+- Sharing from the terminal or from Files (right-click, Scripts): open a
+  document to share it by name, or copy a OneDrive link.
+- A guided setup for people (`omarchohard setup`, also in the launcher as
+  Microsoft 365 Setup) and flags plus JSON for agents (`probe`, `optimize`).
 - An experimental desktop tier that runs real Microsoft Office in a Windows VM.
 
 ## What it is not
@@ -31,7 +38,8 @@ omarchohard install
   Word, Excel, PowerPoint, Outlook or OneNote. omarchohard runs the web apps
   Microsoft hosts at `*.cloud.microsoft`; they need a network connection and
   a Microsoft account (personal, school or work). Features that exist only in
-  desktop Office (some macros, add-ins, advanced mail merge) are not there.
+  desktop Office (VBA macros, COM and VSTO add-ins, advanced mail merge) are
+  not there; Office Add-ins from the store do work (see [Add-ins](#add-ins-and-extensions)).
 - **Not a browser and not a sync engine.** It drives the browser you have and
   the OneDrive client you pick.
 - **Not affiliated with Microsoft.** See the trademark notice at the end.
@@ -39,33 +47,72 @@ omarchohard install
 ## Quick start
 
 ```sh
-# 1. Install the CLI into ~/.local (stable channel)
 curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash
-
-# 2. Add the apps, icons and file handlers
-omarchohard install
-
-# 3. Sign in once (your school or work SSO page appears if you have one)
-omarchohard login
-
-# 4. Put OneDrive on disk so local files open in place
-omarchohard onedrive setup
-
-# Check everything at any time; exits 1 if a required check fails
-omarchohard doctor
 ```
+
+From a terminal, the installer goes straight into `omarchohard setup`, five
+steps that each take one keypress:
+
+1. **Browser.** Your default Chromium-family browser is picked first. If you
+   have none, setup offers to install Chromium.
+2. **Account.** Your Microsoft email, optional; it fills in the sign-in page
+   and the OneDrive address.
+3. **Apps and files.** Pick which apps to install (all are checked; space
+   toggles), and whether `mailto:` links open Outlook.
+4. **Sign in.** Opens Microsoft's own sign-in page once. Skip it if you are
+   already signed in in that browser.
+5. **OneDrive.** Files on demand with rclone (recommended), a full offline
+   copy, or not now.
+
+It ends by running `omarchohard doctor`. Run `omarchohard setup` again at any
+time to change an answer.
+
+**From the launcher.** Install adds **Microsoft 365 Setup** to the apps menu
+(Super + Alt + Space). It opens the same setup in a floating terminal, so
+nobody has to type a command after the one-line install.
+
+**Without questions** (scripts and agents):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash -s -- --yes
+# or pick the answers:
+omarchohard setup --yes --browser chromium --apps word,excel,powerpoint,teams --onedrive none
+```
+
+[docs/agents.md](docs/agents.md) covers `probe --json`, `optimize` and what
+still needs a person.
 
 You need a Chromium-family browser (Chromium, Chrome, Edge, Brave, Helium or
 Vivaldi). If you have none: `omarchy pkg add chromium`. Firefox cannot open
 app windows; see [Firefox as default browser](docs/troubleshooting.md#firefox-as-default-browser).
 
-Options for `omarchohard install`:
+The steps one at a time:
 
-| Option | Effect |
+```sh
+omarchohard install            # launchers, icons, file handlers
+omarchohard login              # sign in once (school or work SSO page if you have one)
+omarchohard onedrive setup     # OneDrive on disk so files open from Files
+omarchohard doctor             # check everything; exits 1 if a required check fails
+```
+
+| `install` option | Effect |
 | --- | --- |
+| `--apps LIST` | Install only these apps, such as `word,excel,teams` (`all` by default) |
 | `--isolated` | Use a dedicated browser profile instead of your everyday one (separate sign-in) |
 | `--no-mail` | Leave your current `mailto:` handler alone |
 | `--prewarm` | Turn on the prewarm service (isolated profile only) |
+
+### Choosing apps
+
+Add or remove one app at any time; a removed app hands its file types back to
+whatever had them before:
+
+```sh
+omarchohard add teams
+omarchohard remove onenote outlook
+```
+
+Microsoft 365 home always stays, as it is the way to every app and to Copilot.
 
 ## Supported apps
 
@@ -82,6 +129,14 @@ Options for `omarchohard install`:
 
 Launch any of them from the launcher, or with `omarchohard launch word`
 (`excel`, `powerpoint`, `outlook`, `onenote`, `teams`, `onedrive`, `m365`).
+
+**Teams** installs like the rest (`omarchohard add teams` if you left it out)
+and runs the new Teams web app, the same one Microsoft ships as the Linux
+"Teams for the web" experience. The browser asks once for the camera and
+microphone. Screen sharing goes through the desktop portal Omarchy ships
+(xdg-desktop-portal-hyprland), which shows a picker for a screen or a window.
+Meeting links from mail or a calendar open in the Teams window. Calls, screen
+sharing and notifications are untested live.
 
 ## How files open
 
@@ -122,7 +177,46 @@ service, `omarchohard-onedrive.service`:
 
 The web apps save straight to OneDrive, so either client brings their edits
 back down to the same folder. `omarchohard onedrive status` shows the client,
-folder, service state and web address.
+folder, service state, web address and, for rclone, the live upload queue
+("up to date", or how many files are uploading). `omarchohard onedrive sync`
+pulls changes from other devices now and waits until every local save has
+uploaded, which is handy before you shut the lid.
+
+The rclone mount answers status questions on a private socket in your runtime
+folder (`$XDG_RUNTIME_DIR`, mode 0700), so nothing listens on the network.
+
+## Sharing
+
+```sh
+omarchohard share Report.docx               # opens it in Word; choose Share to send it by name
+omarchohard share --link Photo.jpg          # copies a view link to the clipboard
+omarchohard share --link --edit Budget.xlsx # an edit link
+```
+
+- An Office document opens in its app, where **Share** sends it to people by
+  name with Microsoft's own sharing dialog.
+- `--link` asks OneDrive for a link, prints it and copies it with `wl-copy`.
+  School and work accounts get a link for people in the organization, since
+  many tenants turn off links for anyone; personal accounts get a link anyone
+  can open. Override with `--org` or `--anyone`.
+- A file outside OneDrive is copied into `OneDrive/Omarchohard/` first, as
+  when opening one.
+- In Files (Nautilus), right-click a file, then **Scripts**: **Share with
+  OneDrive**, **Copy OneDrive link** and **Open in Microsoft 365**. They are
+  added only when Nautilus is installed and removed by `uninstall`.
+
+## Add-ins and extensions
+
+- **Office Add-ins** (the store under Home > Add-ins, such as Grammarly,
+  Zotero or Wikipedia) run in the web apps. They follow your Microsoft
+  account, so one you added on Windows shows up here too.
+  `omarchohard addins word` opens Word and says where to find them.
+- **Browser extensions** you have in your everyday Chromium profile (password
+  managers, Grammarly for Chrome, dark readers) work in every app window with
+  the default shared profile. With `--isolated`, install them in that profile.
+- **COM, VSTO and VBA add-ins** are Windows programs and need desktop Office;
+  use the desktop tier for those.
+
 
 ## Sign-in
 
@@ -169,6 +263,14 @@ time, not page load; page load depends on your network and on Microsoft.
 | Prewarm on (resident windowless browser, about 215 MB RSS) | 230 ms | 230, 238, 221 ms |
 
 With two runs, the median is the midpoint of the two.
+
+omarchohard's own work before it hands off to the browser, best of 15 runs on
+the same machine:
+
+| Step | Time |
+| --- | --- |
+| `omarchohard open --app word` | 18 ms |
+| Double-click a `.docx` (`omarchohard open file.docx`) | 24 ms |
 
 Prewarm (`omarchohard prewarm on`) keeps one windowless browser running in
 the isolated profile. With your default profile it is not needed: when your
@@ -226,13 +328,17 @@ Firefox and wrong accounts, see [docs/troubleshooting.md](docs/troubleshooting.m
 **Verified** (checks that could fail and passed, in a clean Arch Linux
 container; see `make lint test container`):
 
-- 44 bats tests: install twice is idempotent; doctor passes after install and
+- 62 bats tests: install twice is idempotent; doctor passes after install and
   fails on a removed launcher, a removed icon, a reassigned handler and a
   non-executable Exec path; `xdg-open` sends the `.docx`, `.xlsx` and `.pptx`
   fixtures to Word, Excel and PowerPoint; `mailto`, `msteams` and `ms-word`
   mapping; OneDrive address encoding (space, `#`, `é`); outside files copied
   with the original untouched; uninstall restores `mimeapps.list`; the config
-  is never executed; channel switching and checksum refusal.
+  is never executed; channel switching and checksum refusal; `setup --yes`
+  and setup with typed answers; `install --apps`, `add` and `remove` handing
+  file types back; `probe --json` is valid JSON; `optimize` changes nothing
+  without `--apply`; share link scope and copy-in; the Files scripts; and
+  `onedrive sync` against a stub rclone socket.
 - The one-line installer over HTTP for stable, nightly and dev, then install,
   doctor, file handler defaults, switching between all three channels, and
   uninstall.
@@ -244,7 +350,9 @@ container; see `make lint test container`):
   the `/usr` layout.
 
 **Untested live:** a real Microsoft sign-in, the OneDrive mount with a real
-account, an in-place edit round trip, Teams calls, launch-or-focus under
+account, an in-place edit round trip, a real share link, the setup window from
+the launcher, the Files scripts in Nautilus, Teams calls, screen sharing and
+notifications, launch-or-focus under
 Hyprland, the prewarm service under systemd, and the whole desktop tier. The
 launch times above were measured by hand on that laptop.
 

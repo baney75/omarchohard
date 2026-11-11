@@ -22,7 +22,8 @@ declare -gA OH_OFFICE_PRODUCT=(
   [m365]=O365ProPlusRetail
   ["m365-home"]=O365HomePremRetail
   [2024]=ProPlus2024Retail
-  [home2024]=HomeStudent2024Retail
+  [home2024]=Home2024Retail
+  [homebusiness2024]=HomeBusiness2024Retail
   [2021]=ProPlus2021Retail
 )
 
