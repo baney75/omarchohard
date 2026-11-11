@@ -42,31 +42,43 @@ oh_channel() {
     return 0
   fi
   oh_channel_valid "$want" || oh_die "unknown channel '$want' (use stable, nightly or dev)"
-  oh_config_set channel "$want"
-  oh_ok "channel set to $want"
-  oh_update
+  oh_update --channel "$want"
 }
 
+# The config keeps the old channel until the new channel's build is installed,
+# so a failed download or checksum leaves everything as it was.
 oh_update() {
   oh_config_load
-  local check=0 channel latest tmp dest
-  [[ ${1:-} == --check ]] && check=1
-  channel=$(oh_config_get channel)
+  local check=0 channel='' latest tmp dest
+  while (($#)); do
+    case $1 in
+    --check) check=1 ;;
+    --channel)
+      channel=${2:?--channel needs stable, nightly or dev}
+      shift
+      ;;
+    *) oh_die "unknown update option: $1" ;;
+    esac
+    shift
+  done
+  [[ -n $channel ]] || channel=$(oh_config_get channel)
   oh_channel_valid "$channel" || oh_die "config has an unknown channel '$channel'"
 
   if ! oh_self_managed && [[ -z ${OMARCHOHARD_FORCE_SELF_UPDATE:-} ]]; then
+    ((check)) || oh_channel_commit "$channel"
     oh_say "omarchohard at $OH_ROOT was installed by a package manager."
     oh_say "Update it there: the AUR package 'omarchohard' follows stable, 'omarchohard-git' follows dev."
     return 0
   fi
 
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "$tmp"; trap - RETURN' RETURN
   oh_fetch "$(oh_channel_url "$channel" omarchohard.version)" "$tmp/version" ||
     oh_die "could not reach the $channel channel at $(oh_release_base)"
   latest=$(tr -d '[:space:]' <"$tmp/version")
   [[ $latest =~ ^[0-9A-Za-z.+_-]+$ ]] || oh_die "the $channel channel returned a bad version: $latest"
   if [[ $latest == "$(oh_version)" ]]; then
+    ((check)) || oh_channel_commit "$channel"
     oh_ok "up to date: $latest ($channel)"
     return 0
   fi
@@ -91,12 +103,19 @@ oh_update() {
   ln -sfn "$dest" "$OH_CURRENT.new"
   mv -T "$OH_CURRENT.new" "$OH_CURRENT"
   oh_release_prune
+  oh_channel_commit "$channel"
   oh_ok "updated to $latest ($channel)"
 
   # Re-apply launchers and handlers with the new release's app table.
   if [[ -f $OH_STATE_DIR/manifest ]]; then
     "$OH_CURRENT/bin/omarchohard" install >/dev/null 2>&1 || oh_warn "re-applying launchers failed; run: omarchohard install"
   fi
+}
+
+oh_channel_commit() {
+  [[ $(oh_config_get channel) == "$1" && -f $OH_CONFIG ]] && return 0
+  oh_config_set channel "$1"
+  oh_ok "channel set to $1"
 }
 
 # Keep the current release and the two before it.
@@ -106,6 +125,6 @@ oh_release_prune() {
   while IFS= read -r dir; do
     [[ $dir == "$current" ]] && continue
     n=$((n + 1))
-    ((n >= keep)) && rm -rf -- "$dir"
+    ((n < keep)) || rm -rf -- "$dir"
   done < <(find "$OH_RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '*.partial' -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
 }

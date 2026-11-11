@@ -53,9 +53,10 @@ oh_spawn() {
   setsid -f "$@" >/dev/null 2>&1 </dev/null
 }
 
+# share/omarchohard/VERSION in releases and packages; VERSION in a checkout.
 oh_version() {
   local v
-  v=$(cat "$OH_ROOT/VERSION" 2>/dev/null || true)
+  v=$(cat "$OH_SHARE/VERSION" 2>/dev/null || cat "$OH_ROOT/VERSION" 2>/dev/null || true)
   printf '%s\n' "${v:-unknown}"
 }
 

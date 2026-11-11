@@ -74,6 +74,13 @@ oh_app_window() {
     return 0
   fi
   mapfile -t args < <(oh_browser_profile_args)
+  # Test-only hook: extra browser flags, split on spaces (the container tests
+  # pass --no-sandbox here). Not a supported setting.
+  if [[ -n ${OMARCHOHARD_BROWSER_FLAGS:-} ]]; then
+    local -a extra
+    read -r -a extra <<<"$OMARCHOHARD_BROWSER_FLAGS"
+    args+=("${extra[@]}")
+  fi
   oh_spawn "$bin" "${args[@]}" --no-first-run --no-default-browser-check "--app=$url"
 }
 

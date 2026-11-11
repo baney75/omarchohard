@@ -29,7 +29,7 @@ oh_open_one() {
   local app=$1 target=$2
   case $target in
   mailto:*) oh_app_window "$(oh_mailto_url "$target")" 0 ;;
-  msteams:*) oh_app_window "https://teams.microsoft.com/${target#msteams:/}" 0 ;;
+  msteams:*) oh_app_window "$(oh_msteams_url "$target")" 0 ;;
   ms-word:* | ms-excel:* | ms-powerpoint:* | onenote:*) oh_open_office_uri "$target" ;;
   https://* | http://*) oh_app_window "$target" 0 ;;
   file://*) oh_open_file "$app" "$(oh_file_uri_path "$target")" ;;
@@ -41,6 +41,14 @@ oh_file_uri_path() {
   local p=${1#file://}
   p=${p#localhost}
   printf '%b\n' "${p//%/\\x}"
+}
+
+# msteams:/l/meetup-join/... and msteams://teams.microsoft.com/l/... -> the
+# same path on teams.microsoft.com.
+oh_msteams_url() {
+  local path=${1#msteams:}
+  path=${path#//teams.microsoft.com}
+  printf 'https://teams.microsoft.com/%s\n' "${path#/}"
 }
 
 # mailto:a@b?subject=x&body=y -> Outlook compose deep link. mailto values are
