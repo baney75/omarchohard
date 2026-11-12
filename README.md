@@ -376,7 +376,8 @@ launch is a request file, not a new connection. Measured on one machine
 (2026-11-12: dockur 6.06, Windows 11 Enterprise evaluation, Microsoft 365
 Apps, FreeRDP 3, Hyprland 0.57): a Word file opened in 1.2 s through the
 agent against 2.1 s through WinApps alone, and in 0.24 to 0.33 s once the
-agent keeps Word warm. The VM used 17 GB of disk and 3.4 GiB of memory.
+agent keeps Word warm. The VM used 3.4 GiB of memory, and 15 GB of disk
+after `omarchohard desktop slim`, which the first boot also runs.
 Details and the full table are in [docs/desktop-tier.md](docs/desktop-tier.md).
 
  The Windows VM can read your whole

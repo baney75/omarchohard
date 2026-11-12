@@ -27,6 +27,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\office.ps1 > C:\O
 rem A VM never hibernates, so drop hiberfil.sys and the gigabytes it holds.
 powercfg /hibernate off
 
+rem Shrink the disk: apps for home use, update downloads, Office compressed
+rem (21 GB to 16 GB on the test VM). `omarchohard desktop slim` runs it again.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\slim.ps1 -Log C:\OEM\slim.log
+
 rem 4. Sign out of the console, last. dockur signs the user in automatically
 rem after setup, and while that console session is open a RemoteApp shows
 rem "Another user is signed in" instead of the app. Automatic sign-in stays

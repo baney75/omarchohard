@@ -52,6 +52,7 @@ Speed and agents
 Desktop Office (the real Windows apps, in a Windows VM you never see)
   desktop check | install [--wait] | status [--json] | wait | up | down | apps
   desktop run FILE       Open a file in Windows (add-ins, installers, documents)
+  desktop slim           Shrink the VM's disk: home apps, update downloads, compression
   desktop update [--channel current|monthly|semi-annual] [--to VERSION]
   desktop activate [--key-file F] | prefer on|off | remove [--delete-vm]
 

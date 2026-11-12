@@ -10,6 +10,12 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Added
 
+- `omarchohard desktop slim` shrinks the Windows VM's disk: apps for home
+  use, Wi-Fi drivers, Windows Update's download cache, reserved storage and
+  superseded update files go, Office's program files are compressed, and the
+  freed blocks are trimmed so the image on Linux shrinks. The first boot
+  runs it once Office is in. The test VM went from 21 GB to 15 GB with no
+  slower Word start.
 - Desktop Office opens through a warm agent: one hidden RDP connection
   stays open and a PowerShell agent in the Windows session starts each app
   from a request file, with no new connection per launch. A Word file opens

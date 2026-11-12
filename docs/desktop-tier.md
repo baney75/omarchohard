@@ -240,8 +240,33 @@ Enterprise evaluation, Microsoft 365 Apps 16.0.20527, FreeRDP 3, Hyprland
 | A new window of a running app | | 0.46 to 0.58 s | |
 | A window already open | | 0.03 s (focus) | |
 
-The VM used 17 GB of disk and 3.4 GiB of memory. These are numbers from one
-machine, not a promise.
+The VM used 3.4 GiB of memory. These are numbers from one machine, not a
+promise.
+
+### Disk size
+
+The disk image is sparse: it is 80 GB at most, and holds only what Windows
+has written. On the test VM it grew to 21 GB in its first day, most of it
+update downloads that Windows keeps. `omarchohard desktop slim` takes it
+down and the first boot runs it once Office is in:
+
+- apps Windows ships for home use (games, Xbox, news, weather, Clipchamp,
+  the new Outlook, Photos, the Snipping Tool) go; Office, Teams, the Store,
+  Notepad, Paint, the calculator and Windows Security stay;
+- Wi-Fi and face sign-in drivers go; speech, text to speech, handwriting
+  and OCR stay for Dictate, Read Aloud and ink;
+- Windows Update's download cache is cleared and kept under 1 GB;
+- reserved storage is turned off and superseded update files are removed
+  (`DISM /StartComponentCleanup /ResetBase`, so installed updates can no
+  longer be uninstalled);
+- Office's program files are compressed (4.92 GB into 2.53 GB);
+- the freed blocks are trimmed, so the image on Linux shrinks too.
+
+Measured on the test VM (2026-11-12): 21 GB before, 15 GB after, in about
+8 minutes. A cold Word open after a VM boot took 4.95 to 5.25 s after
+compression against 5.03 to 5.33 s before, so compression did not slow it.
+Office keeps working while slim runs. Run it again after big Windows or
+Office updates; Office's updater writes new files uncompressed.
 
 ## Updates
 

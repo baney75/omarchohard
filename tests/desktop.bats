@@ -106,6 +106,10 @@ fake_vm() {
   # The plain-text password automatic sign-in used is removed.
   grep -qxF 'reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f' "$bat"
   grep -qxF 'powercfg /hibernate off' "$bat"
+  # The disk is slimmed once Office is in, before the sign-out.
+  slim=$(grep -nxF 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\slim.ps1 -Log C:\OEM\slim.log' "$bat" | cut -d: -f1)
+  [ -n "$slim" ] && [ "$office" -lt "$slim" ] && [ "$slim" -lt "$reg" ]
+  cmp "$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1" "$XDG_DATA_HOME/omarchohard/vm/oem/slim.ps1"
   # Seen live: Windows kept a cached listing of the inbox and never saw a
   # request, so the SMB client cache is off before anything opens the share.
   smb=$(grep -n 'Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force' "$bat" | cut -d: -f1)
@@ -912,4 +916,49 @@ esac'
     flock -n "$AGENT/holder.lock" true && break
     sleep 0.1
   done
+}
+
+@test "desktop slim hands slim.ps1 to the agent and prints each step until done" {
+  agent_on
+  printf '1\n' >"$AGENT/agent.beat"
+  (
+    for _ in $(seq 100); do
+      for r in "$AGENT"/*.go; do
+        [ -f "$r" ] || continue
+        mv "$r" "$BATS_TEST_TMPDIR/request"
+        printf '\xef\xbb\xbfstart: 27.21 GB used on C:\r\napps: 0.80 GB freed\r\n' >"$AGENT/slim.log"
+        sleep 1.5
+        printf 'done: 20.00 GB used, 7.21 GB freed\r\n' >>"$AGENT/slim.log"
+        exit 0
+      done
+      sleep 0.1
+    done
+  ) 3>&- &
+  run "$OH" desktop slim
+  wait $!
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/request")" = "$(printf 'slim\t')" ]
+  cmp "$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1" "$XDG_DATA_HOME/omarchohard/vm/slim.ps1"
+  [[ $output == *"  start: 27.21 GB used on C:"* ]]
+  [[ $output == *"  apps: 0.80 GB freed"* ]]
+  [[ $output == *"  done: 20.00 GB used, 7.21 GB freed"* ]]
+  [ "$(grep -c 'start:' <<<"$output")" -eq 1 ]
+}
+
+@test "with no agent, desktop slim starts one with no app and the request waiting in the queue" {
+  agent_on
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'cat >/dev/null; a=$XDG_STATE_HOME/omarchohard/agent; cp "$a"/*.go "$HOME/queued"; : >"$a/agent.beat"; printf "done\n" >"$a/slim.log"; sleep 0.5'
+  run "$OH" desktop slim
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/queued")" = "$(printf 'slim\t')" ]
+  [ "$(sed -n 3p "$AGENT/first.cmd" | cut -d' ' -f1)" = powershell.exe ]
+  [ ! -e "$HOME/winapps.log" ]
+}
+
+@test "slim.ps1 keeps Office, Teams and the Store, and trims what it frees" {
+  local ps=$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1
+  [ "$(grep -cE "'(Microsoft\.Office\.Desktop|MSTeams|Microsoft\.WindowsStore|Microsoft\.DesktopAppInstaller)'" "$ps")" -eq 0 ]
+  grep -qF 'Optimize-Volume -DriveLetter C -ReTrim' "$ps"
+  grep -qF "Write-Step (\"done:" "$ps"
 }

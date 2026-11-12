@@ -14,6 +14,7 @@
 #   run                                     open the file ARG with its Windows program
 #   uri                                     open an ms-word:, ms-excel:,
 #                                           ms-powerpoint: or onenote: link
+#   slim                                    run slim.ps1, hidden
 # Files are \\tsclient\home\... or \\tsclient\media\... paths.
 #
 # -Warm names apps to keep started and hidden once Office is signed in, so
@@ -65,6 +66,11 @@ function Invoke-Request([string]$Line) {
   } elseif ($verb -eq 'uri') {
     if ($arg -notmatch '^(ms-(word|excel|powerpoint)|onenote):') { throw "refused link: $arg" }
     Start-Process -FilePath $arg
+  } elseif ($verb -eq 'slim') {
+    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $PSScriptRoot 'slim.ps1') + '"'),
+      '-Log', ('"' + (Join-Path $Queue 'slim.log') + '"'))
+    $p = Start-Process -FilePath powershell.exe -ArgumentList $a -WindowStyle Hidden -PassThru
+    [void]$jobs.Add($p.Id)
   } elseif ($exe.ContainsKey($verb)) {
     $program = Join-Path $officeDir ($exe[$verb] + '.EXE')
     if ($arg) { Start-Process -FilePath $program -ArgumentList ('"' + (Assert-HostPath $arg) + '"') }
@@ -109,8 +115,10 @@ function Start-WarmApps {
 }
 
 # Office with a window on screen counts as use, so the agent stays while
-# you work. A hidden warm app does not.
+# you work, and so does a slim still running. A hidden warm app does not.
+$jobs = New-Object Collections.ArrayList
 function Test-OfficeInUse {
+  if ($jobs | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) { return $true }
   [bool](Get-Process -Name $exe.Values -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
 }
 
