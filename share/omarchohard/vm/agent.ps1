@@ -70,11 +70,23 @@ function Invoke-Request([string]$Line) {
   }
 }
 
-# Microsoft 365 shows a sign-in window on start until someone signs in, so
-# warm apps wait for a signed-in identity. Other editions sign in with a key.
+# Microsoft 365 shows a sign-in window on start until someone signs in, and
+# a key edition shows its activation wizard until it is activated. Hidden,
+# nobody could answer either, so warm apps wait for a signed-in identity or
+# an activated Office license. The license query takes about a second, so it
+# runs once a minute at most.
+$script:signedIn = $false
+$script:lastLicense = [DateTime]::MinValue
 function Test-OfficeSignedIn {
-  if ("$($c2r.ProductReleaseIds)" -notmatch 'O365') { return $true }
-  [bool](Get-ChildItem 'HKCU:\Software\Microsoft\Office\16.0\Common\Identity\Identities' -ErrorAction SilentlyContinue)
+  if ($script:signedIn) { return $true }
+  if ("$($c2r.ProductReleaseIds)" -match 'O365') {
+    $script:signedIn = [bool](Get-ChildItem 'HKCU:\Software\Microsoft\Office\16.0\Common\Identity\Identities' -ErrorAction SilentlyContinue)
+  } elseif (([DateTime]::UtcNow - $script:lastLicense).TotalSeconds -ge 60) {
+    $script:lastLicense = [DateTime]::UtcNow
+    # 0ff1ce15-... is Office's application ID in Windows licensing.
+    $script:signedIn = [bool](Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='0ff1ce15-a989-479d-af46-f275c6370663' AND LicenseStatus=1" -ErrorAction SilentlyContinue)
+  }
+  $script:signedIn
 }
 
 $warmPids = @{}

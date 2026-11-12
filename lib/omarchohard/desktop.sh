@@ -602,7 +602,10 @@ oh_desktop_resume() {
   case ${state%% *} in
   running) ;;
   paused) oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null ;;
-  *) oh_die "the Windows VM is $state; start it with: omarchohard desktop up" ;;
+  *)
+    [[ ${1:-} != --try ]] || return 1
+    oh_die "the Windows VM is $state; start it with: omarchohard desktop up"
+    ;;
   esac
 }
 
@@ -706,9 +709,11 @@ oh_agent_send() {
 # Start the holder with the first request in first.cmd. The app starts at
 # once and the agent after it in the same hidden console, so the first
 # window does not wait for PowerShell (2.0 s against 4.0 s, measured).
-# Returns 1 when another holder holds the lock.
+# Waits for the agent's first beat, up to 30 s. Returns 1 when another
+# holder holds the lock, 2 when the holder's FreeRDP ended before the agent
+# beat (a refused certificate, a wrong password), so WinApps can show why.
 oh_agent_start() {
-  local verb=$1 arg=$2 lock start q ps
+  local verb=$1 arg=$2 lock start q ps warm i
   exec {lock}>"$OH_AGENT_DIR/holder.lock"
   if ! flock -n "$lock"; then
     exec {lock}>&-
@@ -732,15 +737,31 @@ oh_agent_start() {
   mkdir -p "${OH_AGENT_PS1%/*}"
   cp -f -- "$OH_SHARE/vm/agent.ps1" "$OH_AGENT_PS1"
   rm -f -- "$OH_AGENT_DIR/agent.beat"
+  # Windows PowerShell drops an empty quoted argument, so no warm apps means
+  # no -Warm at all.
+  warm=$(oh_config_get desktop_warm | tr -cd 'a-z,')
+  [[ -z $warm ]] || warm=" -Warm \"$warm\""
   {
     printf '@echo off\r\nchcp 65001 >nul\r\n%s\r\n' "$start"
-    printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s" -Warm "%s"\r\n' \
-      "${ps//\//\\}" "${q//\//\\}" "$(oh_config_get desktop_warm | tr -cd 'a-z,')"
+    printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"%s\r\n' \
+      "${ps//\//\\}" "${q//\//\\}" "$warm"
   } >"$OH_AGENT_DIR/first.cmd"
   # The holder keeps its copy of the lock; printf is a builtin, so the
   # password goes into the pipe, never into an argument list.
   printf '%s\n' "${OH_WA[RDP_PASS]}" | OH_HOLDER_LOCK=$lock setsid -f "$(oh_bin_path)" desktop holder >/dev/null 2>&1
   exec {lock}>&-
+  # The holder lets go of the lock when FreeRDP ends.
+  for ((i = 0; i < 300; i++)); do
+    [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+    exec {lock}>"$OH_AGENT_DIR/holder.lock"
+    if flock -n "$lock"; then
+      exec {lock}>&-
+      [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+      return 2
+    fi
+    exec {lock}>&-
+    sleep 0.1
+  done
 }
 
 # Open VERB [ARG] through the agent: hand it over when the agent is up, or
@@ -756,8 +777,13 @@ oh_agent_go() {
     oh_agent_send "$verb" "$arg" 30 && return 0
   fi
   # No beat: the VM may be paused, with the holder's connection waiting.
-  oh_desktop_resume
-  oh_agent_start "$verb" "$arg" && return 0
+  # A stopped VM goes to WinApps, which says so.
+  oh_desktop_resume --try || return 1
+  oh_agent_start "$verb" "$arg"
+  case $? in
+  0) return 0 ;;
+  2) return 1 ;;
+  esac
   # A holder is starting: its agent takes the request once it is up.
   oh_agent_send "$verb" "$arg" 100
 }

@@ -771,7 +771,9 @@ agent_on() {
   desktop_preferred
   sed -i '/^desktop_agent=off$/d' "$XDG_CONFIG_HOME/omarchohard/config"
   # shellcheck disable=SC2016
-  stub xfreerdp3 'printf "%s\n" "$@" >"$HOME/rdp.args"; cat >"$HOME/rdp.stdin"'
+  # A connection whose agent beats once, as agent.ps1 does when it starts.
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'printf "%s\n" "$@" >"$HOME/rdp.args"; cat >"$HOME/rdp.stdin"; : >"$XDG_STATE_HOME/omarchohard/agent/agent.beat"; sleep 0.5'
   # shellcheck disable=SC2016
   stub docker 'case "$1" in inspect) echo running ;; esac; exit 0'
   AGENT=$XDG_STATE_HOME/omarchohard/agent
@@ -854,6 +856,27 @@ esac'
   flock -n "$AGENT/holder.lock" true
 }
 
+@test "a connection that ends before the agent beats opens the app through WinApps, and no warm apps means no -Warm" {
+  agent_on
+  printf 'desktop_warm=\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'cat >/dev/null; exit 131'
+  run "$OH" desktop open word
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/winapps.log")" = word-o365 ]
+  [ "$(sed -n 4p "$AGENT/first.cmd")" = "$(printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"\r' '\\tsclient\home\.local\share\omarchohard\vm\agent.ps1' '\\tsclient\home\.local\state\omarchohard\agent')" ]
+}
+
+@test "a stopped VM opens the app through WinApps, which says why" {
+  agent_on
+  # shellcheck disable=SC2016
+  stub docker 'case "$1" in inspect) echo exited ;; esac; exit 0'
+  run "$OH" desktop open excel
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/winapps.log")" = excel-o365 ]
+  [ ! -e "$HOME/rdp.args" ]
+}
+
 @test "desktop_agent=off, or a state folder outside home, keeps every launch on WinApps" {
   agent_on
   printf 'desktop_agent=off\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
@@ -873,6 +896,7 @@ esac'
   grep -qF "if (\$arg -notmatch '^(ms-(word|excel|powerpoint)|onenote):') { throw \"refused link: \$arg\" }" "$ps"
   grep -qF "[IO.File]::Move(\$f, \"\$f.run\")" "$ps"
   grep -qF "if (-not \$Warm -or -not (Test-OfficeSignedIn)) { return }" "$ps"
+  grep -qF "ApplicationID='0ff1ce15-a989-479d-af46-f275c6370663' AND LicenseStatus=1" "$ps"
   grep -qF "New-Object Threading.Mutex(\$true, 'Local\\omarchohard-agent', [ref]\$created)" "$ps"
 }
 
