@@ -72,7 +72,7 @@ function Invoke-Request([string]$Line) {
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $PSScriptRoot 'slim.ps1') + '"'),
       '-Log', ('"' + (Join-Path $Queue $arg) + '"'))
     $p = Start-Process -FilePath powershell.exe -ArgumentList $a -WindowStyle Hidden -PassThru
-    [void]$jobs.Add($p.Id)
+    $jobs[$p] = $arg
   } elseif ($exe.ContainsKey($verb)) {
     $program = Join-Path $officeDir ($exe[$verb] + '.EXE')
     if ($arg) { Start-Process -FilePath $program -ArgumentList ('"' + (Assert-HostPath $arg) + '"') }
@@ -118,9 +118,16 @@ function Start-WarmApps {
 
 # Office with a window on screen counts as use, so the agent stays while
 # you work, and so does a slim still running. A hidden warm app does not.
-$jobs = New-Object Collections.ArrayList
+$jobs = @{}
 function Test-OfficeInUse {
-  if ($jobs | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) { return $true }
+  # A slim that ended with an error tells the host, which is waiting for its
+  # log to say done.
+  foreach ($p in @($jobs.Keys)) {
+    if (-not $p.HasExited) { continue }
+    if ($p.ExitCode -ne 0) { Write-AgentLog "error slim`t$($jobs[$p]) : slim ended with exit code $($p.ExitCode) before it finished" }
+    $jobs.Remove($p)
+  }
+  if ($jobs.Count) { return $true }
   [bool](Get-Process -Name $exe.Values -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
 }
 

@@ -20,7 +20,7 @@ $ProgressPreference = 'SilentlyContinue'
 $created = $false
 $mutex = New-Object Threading.Mutex($true, 'Global\omarchohard-slim', [ref]$created)
 if (-not $created) {
-  Add-Content -LiteralPath $Log -Encoding UTF8 -Value 'done: a slim is already running in Windows; run desktop slim again once it ends'
+  Add-Content -LiteralPath $Log -Encoding UTF8 -Value 'busy: a slim is already running in Windows; run desktop slim again once it ends'
   exit 0
 }
 
@@ -31,14 +31,15 @@ function Get-UsedGB { [math]::Round((Get-PSDrive C).Used / 1GB, 2) }
 
 # Apps Windows 11 ships for home use, and Photos and the Snipping Tool,
 # which Office never calls (its Insert > Screenshot is its own). Office,
-# Teams (MSTeams), the Store, the app installer, Notepad, Paint, the
-# calculator, the terminal and Windows Security stay.
+# the new Teams (MSTeams), the Store, the app installer, Notepad, Paint, the
+# calculator, the terminal and Windows Security stay, and so do Sticky
+# Notes, To Do, Clipchamp and People, which can hold notes and projects
+# kept only on this VM.
 $appx = @(
-  'Clipchamp.Clipchamp', 'Microsoft.549981C3F5F10', 'Microsoft.BingNews', 'Microsoft.BingSearch',
+  'Microsoft.549981C3F5F10', 'Microsoft.BingNews', 'Microsoft.BingSearch',
   'Microsoft.BingWeather', 'Microsoft.Copilot', 'Microsoft.GamingApp', 'Microsoft.GetHelp',
   'Microsoft.Getstarted', 'Microsoft.MicrosoftOfficeHub', 'Microsoft.MicrosoftSolitaireCollection',
-  'Microsoft.MicrosoftStickyNotes', 'Microsoft.OutlookForWindows', 'Microsoft.People',
-  'Microsoft.PowerAutomateDesktop', 'Microsoft.Todos', 'Microsoft.Windows.DevHome',
+  'Microsoft.OutlookForWindows', 'Microsoft.PowerAutomateDesktop', 'Microsoft.Windows.DevHome',
   'Microsoft.WindowsAlarms', 'Microsoft.WindowsCamera', 'Microsoft.WindowsFeedbackHub',
   'Microsoft.Windows.Photos', 'Microsoft.ScreenSketch',
   'Microsoft.WindowsMaps', 'Microsoft.WindowsSoundRecorder', 'Microsoft.Xbox.TCUI',

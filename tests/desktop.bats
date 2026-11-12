@@ -978,6 +978,35 @@ current_beat() {
   [ "$SECONDS" -lt 10 ]
 }
 
+@test "desktop slim fails when another slim is already running in Windows" {
+  agent_on
+  current_beat
+  (
+    for _ in $(seq 100); do
+      for r in "$AGENT"/*.go; do
+        [ -f "$r" ] || continue
+        log=$AGENT/$(cut -f2 "$r")
+        rm -f "$r"
+        printf '\xef\xbb\xbfbusy: a slim is already running in Windows\r\n' >"$log"
+        exit 0
+      done
+      sleep 0.1
+    done
+  ) 3>&- &
+  SECONDS=0
+  run "$OH" desktop slim
+  wait $!
+  [ "$status" -ne 0 ]
+  [[ $output == *"  busy: a slim is already running in Windows"* ]]
+  [ "$SECONDS" -lt 10 ]
+}
+
+@test "the agent reports a slim that ends before it finishes" {
+  local ps=$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1
+  # shellcheck disable=SC2016 # PowerShell text, matched as written
+  grep -qF 'if ($p.ExitCode -ne 0) { Write-AgentLog "error slim`t$($jobs[$p]) : slim ended with exit code $($p.ExitCode) before it finished" }' "$ps"
+}
+
 @test "an agent from before an upgrade gets no slim request" {
   agent_on
   printf '1\n' >"$AGENT/agent.beat"

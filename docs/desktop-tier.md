@@ -250,9 +250,14 @@ has written. On the test VM it grew to 21 GB in its first day, most of it
 update downloads that Windows keeps. `omarchohard desktop slim` takes it
 down and the first boot runs it once Office is in:
 
-- apps Windows ships for home use (games, Xbox, news, weather, Clipchamp,
-  the new Outlook, Photos, the Snipping Tool) go; Office, Teams, the Store,
-  Notepad, Paint, the calculator and Windows Security stay;
+- apps Windows ships for home use go: games, Xbox, news, weather, maps,
+  Bing search, Copilot, Cortana, Dev Home, Power Automate, Phone Link, Quick
+  Assist, Get Help, Tips, Feedback Hub, alarms, camera, sound recorder,
+  Media Player, Movies & TV, the Microsoft 365 hub app, widgets, cross-device, personal Teams, the new Outlook,
+  Photos and the Snipping Tool. Office, the new Teams, the Store, Notepad,
+  Paint, the calculator, the terminal and Windows Security stay, and so do
+  Sticky Notes, To Do, Clipchamp and People, which can keep notes and
+  projects only on the VM;
 - Wi-Fi and face sign-in drivers go; speech, text to speech, handwriting
   and OCR stay for Dictate, Read Aloud and ink;
 - Windows Update's download cache is cleared and kept under 1 GB;

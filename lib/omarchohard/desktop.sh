@@ -742,8 +742,9 @@ oh_agent_start() {
   # start runs a .bat with cmd /K, which leaves its window open; explorer
   # opens a file the way the agent's Start-Process does.
   run) start='explorer.exe' ;;
-  # Any other request waits in the queue for the agent.
-  *) start='' ;;
+  # slim waits in the queue for the agent.
+  slim) start='' ;;
+  *) start='start ""' ;;
   esac
   # cmd expands %NAME% even inside quotes; %% is a literal %.
   [[ -z $start || -z $arg ]] || start+=" \"${arg//%/%%}\""
@@ -810,7 +811,7 @@ oh_agent_go() {
 # `desktop slim`: shrink the VM's disk with slim.ps1, run by the agent, and
 # print each step as it lands.
 oh_desktop_slim() {
-  local name log line n=0 i alog=$OH_AGENT_DIR/agent.log a0
+  local name log line n=0 i gone=0 alog=$OH_AGENT_DIR/agent.log a0
   (($# == 0)) || oh_die "usage: omarchohard desktop slim"
   oh_desktop_ready || oh_die "desktop Office is not set up yet (omarchohard desktop install --wait)"
   # An agent started before an upgrade does not know slim; it stops 15
@@ -826,13 +827,19 @@ oh_desktop_slim() {
   for ((i = 0; i < 3600; i++)); do
     line=$(tail -n +$((a0 + 1)) -- "$alog" 2>/dev/null | grep -m1 'error slim') &&
       oh_die "Windows refused it: ${line#*error slim}"
+    # The agent stops beating when Windows stops or the connection ends.
+    if oh_agent_alive; then gone=0; elif ((++gone > 30)); then
+      oh_die "the Windows session ended before slim finished; run desktop slim again"
+    fi
     if [[ -f $log ]]; then
       while IFS= read -r line; do
         line=${line#$'\xef\xbb\xbf'}
         printf '  %s\n' "${line%$'\r'}"
       done < <(tail -n +$((n + 1)) -- "$log")
       n=$(wc -l <"$log")
-      grep -q '^done' -- "$log" && return 0
+      # Windows PowerShell starts a new file with a byte order mark.
+      grep -qE $'^(\xef\xbb\xbf)?busy' -- "$log" && return 1
+      grep -qE $'^(\xef\xbb\xbf)?done' -- "$log" && return 0
     fi
     sleep 1
   done
