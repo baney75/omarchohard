@@ -17,6 +17,6 @@ pkgbase = omarchohard
 	optdepends = freerdp: desktop tier (WinApps RemoteApp windows)
 	optdepends = docker: desktop tier (Windows VM)
 	source = omarchohard-0.2.0.tar.gz::https://github.com/baney75/omarchohard/archive/refs/tags/v0.2.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = 7fa6ee3fe81506751ba368934c9978ad98ab107182933cfb2459bd7cae0f13ff
 
 pkgname = omarchohard
