@@ -88,6 +88,10 @@ oh_mime_claim() {
   shift
   for mime in "$@"; do
     [[ -n $mime ]] || continue
+    # The refresh after an update takes only types never taken before: one
+    # with a saved line was ours once, and whoever has it now is the user's
+    # choice.
+    [[ -n ${OH_NEW_TYPES_ONLY:-} ]] && awk -F'\t' -v m="$mime" '$1 == m { found = 1 } END { exit !found }' "$OH_MIME_BACKUP" 2>/dev/null && continue
     oh_mime_backup "$mime"
     xdg-mime default "$desktop" "$mime"
   done
@@ -305,12 +309,13 @@ oh_install() {
 
 # A package update brings new file types and launcher lines but runs no
 # user command, so the first open, launch or doctor after it installs
-# again, quietly, the way `omarchohard update` does. Nothing happens when
-# omarchohard was never installed for this user.
+# again, quietly, claiming only the types it never had. Nothing happens
+# when omarchohard was never installed for this user. Its own process, so
+# a failed step stops it before the stamp is written.
 oh_install_refresh() {
   [[ -f $OH_APPS_DIR/omarchohard-setup.desktop ]] || return 0
   [[ $(cat -- "$OH_INSTALL_STAMP" 2>/dev/null) == "$(oh_version)" ]] && return 0
-  (oh_install) >/dev/null 2>&1 || oh_warn "re-applying launchers after the update failed; run: omarchohard install"
+  OH_NEW_TYPES_ONLY=1 "$OH_SELF" install >/dev/null 2>&1 || oh_warn "re-applying launchers after the update failed; run: omarchohard install"
 }
 
 oh_uninstall() {
