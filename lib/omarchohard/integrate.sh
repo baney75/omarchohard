@@ -265,6 +265,8 @@ oh_install() {
   [[ $mail == 0 ]] && oh_mime_release_types "$(oh_app_desktop_id outlook)" x-scheme-handler/mailto
   oh_setup_entry_write "$bin"
   oh_nautilus_scripts_write "$bin"
+  # The desktop tier's "Open in Windows", kept pointing at this copy.
+  [[ -f $OH_APPS_DIR/$OH_ADDIN_ENTRY ]] && oh_desktop_addin_entry_write
   oh_refresh_desktop_db
   ((prewarm)) && oh_prewarm on
   oh_say ""

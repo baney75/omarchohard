@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Installed by omarchohard with the desktop tier: Office add-in files that
+     shared-mime-info has no type of their own for, so "Open in Windows" can
+     offer to open them. .xll would otherwise read as an .xls workbook. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-ms-excel-xll">
+    <comment>Excel add-in (XLL)</comment>
+    <glob pattern="*.xll" weight="60"/>
+  </mime-type>
+  <mime-type type="application/x-ms-vsto">
+    <comment>Office add-in manifest (VSTO)</comment>
+    <glob pattern="*.vsto" weight="60"/>
+  </mime-type>
+</mime-info>

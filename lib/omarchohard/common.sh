@@ -149,13 +149,18 @@ oh_notify() {
 }
 
 oh_refresh_desktop_db() {
+  local mime=${XDG_DATA_HOME:-$HOME/.local/share}/mime
   oh_have update-desktop-database && update-desktop-database "$OH_APPS_DIR" >/dev/null 2>&1 || true
   oh_have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$OH_ICON_DIR" >/dev/null 2>&1 || true
+  # The desktop tier's add-in types; this also drops them once uninstall
+  # removed the package.
+  [[ -d $mime/packages ]] && oh_have update-mime-database && update-mime-database "$mime" >/dev/null 2>&1 || true
 }
 
-# A value written into a unit file must be one plain line.
+# A value written into a unit file must be one plain line. WHAT, the third
+# argument, says what is refused instead.
 oh_require_line() {
-  [[ $1 != *[[:cntrl:]]* ]] || oh_die "$2 has a control character in it; refusing to write it into a service file"
+  [[ $1 != *[[:cntrl:]]* ]] || oh_die "$2 has a control character in it; refusing to ${3:-write it into a service file}"
 }
 
 # One argument of a systemd Exec line: in double quotes, with \ and " escaped,

@@ -437,6 +437,8 @@ oh_desktop_register() {
   # setup.sh loads ./install/inquirer.sh, so it runs from its own folder.
   (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user --setupAllOfficiallySupportedApps) ||
     oh_die "WinApps could not add the apps; try again with: omarchohard desktop apps"
+  oh_desktop_addin_entry_write
+  oh_refresh_desktop_db
   oh_desktop_prefer on
 }
 
@@ -445,6 +447,8 @@ oh_desktop_apps() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "WinApps now scans the VM and lists the apps it found. Choose the Office apps."
   (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user)
+  oh_desktop_addin_entry_write
+  oh_refresh_desktop_db
   oh_say ""
   oh_say "To open local files in desktop Office instead of the web apps:"
   oh_say "  omarchohard desktop prefer on"
@@ -471,6 +475,95 @@ oh_desktop_open_file() {
   [[ $file == "$HOME"/* || $file == /run/media/* ]] ||
     oh_die "desktop Office can open files under $HOME or /run/media only"
   oh_spawn winapps "$wa" "$file"
+}
+
+# The FreeRDP 3 client, the same order oh_desktop_check accepts.
+oh_desktop_freerdp() {
+  local bin
+  for bin in xfreerdp3 xfreerdp sdl-freerdp3; do
+    oh_have "$bin" && printf '%s\n' "$bin" && return 0
+  done
+  return 1
+}
+
+# Windows cannot reach a paused VM over RDP; WinApps' autopause pauses it
+# when idle and unpauses it on launch, so do the same.
+oh_desktop_resume() {
+  local engine state
+  engine=$(oh_desktop_engine) || oh_die "Docker or Podman is required"
+  state=$("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null || echo missing)
+  case ${state%% *} in
+  running) ;;
+  paused) oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null ;;
+  *) oh_die "the Windows VM is $state; start it with: omarchohard desktop up" ;;
+  esac
+}
+
+# Open any file under ~ or /run/media in Windows with its Windows default
+# handler: an add-in (.xll .xlam .ppam .dotm .vsto) installs into Office, an
+# installer (.exe .msi) runs, a document opens. It is a RemoteApp of
+# explorer.exe with the file's \\tsclient path, as WinApps' own launches use.
+oh_desktop_run() {
+  local file=${1:-} abs win rdp
+  local -a args
+  [[ -n $file && $# -eq 1 ]] || oh_die "usage: omarchohard desktop run FILE"
+  oh_require_line "$file" "the file name" "open it in Windows"
+  [[ -e $file ]] || oh_die "no such file: $file"
+  abs=$(readlink -f -- "$file")
+  oh_require_line "$abs" "the file's full path" "open it in Windows"
+  # shellcheck disable=SC1003 # a Windows path ends in a backslash
+  case $abs in
+  "$HOME"/*) win='\\tsclient\home\'${abs#"$HOME"/} ;;
+  /run/media/*) win='\\tsclient\media\'${abs#/run/media/} ;;
+  *) oh_die "Windows can open files under $HOME or /run/media only" ;;
+  esac
+  # Windows file names cannot hold ", and it would end the cmd: value early.
+  [[ $abs != *\"* ]] || oh_die "Windows cannot open a path with \" in it: $abs"
+  win=${win//\//\\}
+  rdp=$(oh_desktop_freerdp) || oh_die "FreeRDP 3 is missing: omarchy pkg add freerdp"
+  oh_winapps_conf_load || oh_die "run omarchohard desktop install first"
+  oh_desktop_resume
+  args=("/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}" "/u:${OH_WA[RDP_USER]}")
+  [[ -z ${OH_WA[RDP_DOMAIN]} ]] || args+=("/d:${OH_WA[RDP_DOMAIN]}")
+  # /from-stdin:force reads the password from stdin before connecting
+  # (FreeRDP 3 client/common/cmdline.c), so it is never in an argument list.
+  # WinApps itself passes /p:, which every process on the machine can read.
+  args+=(/from-stdin:force /cert:tofu +home-drive)
+  [[ -d /run/media ]] && args+=("/drive:media,/run/media")
+  args+=("/wm-class:Microsoft Windows" "/app:program:C:\\Windows\\explorer.exe,name:Open in Windows,cmd:\"$win\"")
+  if oh_dry; then
+    oh_run "$rdp" "${args[@]}"
+    return 0
+  fi
+  # printf is a builtin: the password goes into the pipe, never into argv.
+  printf '%s\n' "${OH_WA[RDP_PASS]}" | setsid -f "$rdp" "${args[@]}" >/dev/null 2>&1
+}
+
+# "Open in Windows" in the Files app's Open With list, for Office add-ins.
+# Written only once the desktop tier has its apps; uninstall removes it.
+OH_ADDIN_MIMES='application/vnd.ms-excel.addin.macroEnabled.12;application/vnd.ms-powerpoint.addin.macroEnabled.12;application/vnd.ms-word.template.macroEnabled.12;application/x-ms-excel-xll;application/x-ms-vsto;'
+OH_ADDIN_ENTRY=omarchohard-windows.desktop
+
+oh_desktop_addin_entry_write() {
+  local bin file=$OH_APPS_DIR/$OH_ADDIN_ENTRY pkg
+  pkg=${XDG_DATA_HOME:-$HOME/.local/share}/mime/packages/omarchohard-addins.xml
+  bin=$(oh_bin_path)
+  mkdir -p "$OH_APPS_DIR" "${pkg%/*}"
+  cp "$OH_SHARE/mime/omarchohard-addins.xml" "$pkg"
+  oh_manifest_add "$pkg"
+  {
+    printf '[Desktop Entry]\nVersion=1.0\nType=Application\n'
+    printf 'Name=Open in Windows\n'
+    printf 'Comment=Open the file in Windows with its Windows program: add-ins, installers, documents\n'
+    printf 'Exec=%s desktop run %%f\n' "$(oh_desktop_exec_arg "$bin")"
+    printf 'Icon=omarchohard-m365\nTerminal=false\nNoDisplay=true\nCategories=Office;\n'
+    printf 'MimeType=%s\n' "$OH_ADDIN_MIMES"
+  } >"$file"
+  oh_manifest_add "$file"
+}
+
+oh_desktop_addin_entry_remove() {
+  rm -f -- "$OH_APPS_DIR/$OH_ADDIN_ENTRY" "${XDG_DATA_HOME:-$HOME/.local/share}/mime/packages/omarchohard-addins.xml"
 }
 
 # Read a key without echoing it. Accepts XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
@@ -593,6 +686,8 @@ oh_desktop_remove() {
     oh_desktop_compose down
   fi
   oh_config_set open_with web
+  oh_desktop_addin_entry_remove
+  oh_refresh_desktop_db
   if ((delete_vm)); then oh_ok "desktop tier removed and the VM disk deleted"; else oh_ok "desktop tier stopped; the VM disk is kept"; fi
   oh_dim "WinApps launchers can be removed with: $OH_WINAPPS_DIR/setup.sh --user --uninstall"
 }
@@ -629,8 +724,9 @@ oh_desktop() {
   down) oh_desktop_compose stop ;;
   apps) oh_desktop_apps ;;
   activate) oh_desktop_activate "$@" ;;
+  run) oh_desktop_run "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|run|activate|prefer|remove" ;;
   esac
 }

@@ -301,3 +301,80 @@ desktop_preferred() {
   [ "$(cat "$HOME/winapps.log")" = "$(printf 'word-o365\nexcel-o365 %s' "$HOME/Budget.xlsx")" ]
   [ ! -s "$HOME/chromium.log" ]
 }
+
+# A FreeRDP that records its arguments and what it read on stdin.
+freerdp_stub() {
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'for a in "$@"; do printf "%s\n" "$a"; done >"$HOME/rdp.args.tmp"; cat >"$HOME/rdp.stdin"; mv "$HOME/rdp.args.tmp" "$HOME/rdp.args"'
+}
+
+@test "desktop run opens a file in Windows through explorer, with the password only on stdin" {
+  vm_stub
+  freerdp_stub
+  mkdir -p "$XDG_CONFIG_HOME/winapps" "$HOME/Add-ins"
+  # shellcheck disable=SC2016 # a literal $ in the test password
+  printf 'RDP_USER="ada"\nRDP_PASS="s3cr$t pw"\nRDP_IP="127.0.0.1"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  : >"$HOME/Add-ins/Stats Tool.xll"
+  printf 'paused 0\n' >"$HOME/vm.state"
+  run "$OH" desktop run "$HOME/Add-ins/Stats Tool.xll"
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -f "$HOME/rdp.args" ] && break
+    sleep 0.1
+  done
+  grep -qxF '/app:program:C:\Windows\explorer.exe,name:Open in Windows,cmd:"\\tsclient\home\Add-ins\Stats Tool.xll"' "$HOME/rdp.args"
+  grep -qxF '/from-stdin:force' "$HOME/rdp.args"
+  grep -qxF '/u:ada' "$HOME/rdp.args"
+  grep -qxF '/v:127.0.0.1:3389' "$HOME/rdp.args"
+  # shellcheck disable=SC2016
+  [ "$(cat "$HOME/rdp.stdin")" = 's3cr$t pw' ]
+  run grep -F 's3cr' "$HOME/rdp.args"
+  [ "$status" -ne 0 ]
+  # The paused VM was woken first.
+  grep -qx 'unpause WinApps' "$HOME/docker.log"
+}
+
+@test "desktop run refuses files outside home and /run/media, and control characters" {
+  vm_stub
+  freerdp_stub
+  run "$OH" desktop run /etc/hostname
+  [ "$status" -eq 1 ]
+  [[ $output == *"under $HOME or /run/media only"* ]]
+  bad=$HOME/$'two\nlines.xll'
+  : >"$bad"
+  run "$OH" desktop run "$bad"
+  [ "$status" -eq 1 ]
+  [[ $output == *"control character"* ]]
+  ln -s /etc/hostname "$HOME/link.txt"
+  run "$OH" desktop run "$HOME/link.txt"
+  [ "$status" -eq 1 ]
+  [ ! -e "$HOME/rdp.args" ]
+}
+
+@test "Open in Windows is offered for add-ins once the desktop apps are added, and uninstall removes it" {
+  oh_install_quiet
+  [ ! -e "$APPS/omarchohard-windows.desktop" ]
+  wa=$XDG_DATA_HOME/omarchohard/winapps
+  mkdir -p "$wa"
+  printf '#!/bin/sh\nexit 0\n' >"$wa/setup.sh"
+  chmod +x "$wa/setup.sh"
+  desktop_preferred
+  run "$OH" desktop apps
+  [ "$status" -eq 0 ]
+  entry=$APPS/omarchohard-windows.desktop
+  grep -qx 'Name=Open in Windows' "$entry"
+  grep -qx "Exec=$OH desktop run %f" "$entry"
+  for t in application/vnd.ms-excel.addin.macroEnabled.12 application/vnd.ms-powerpoint.addin.macroEnabled.12 \
+    application/vnd.ms-word.template.macroEnabled.12 application/x-ms-excel-xll application/x-ms-vsto; do
+    grep -q "^MimeType=.*$t;" "$entry"
+  done
+  if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$entry"; fi
+  pkg=$XDG_DATA_HOME/mime/packages/omarchohard-addins.xml
+  grep -qF 'pattern="*.xll"' "$pkg"
+  # A reinstall (as after omarchohard update) keeps it.
+  oh_install_quiet
+  [ -f "$entry" ]
+  "$OH" uninstall >/dev/null 2>&1
+  [ ! -e "$entry" ]
+  [ ! -e "$pkg" ]
+}
