@@ -46,11 +46,11 @@ declare -gA OH_OFFICE_CHANNELS=([current]=Current [monthly]=MonthlyEnterprise ["
 # Excel opens, Word's window has the class "Microsoft Excel" too (seen live,
 # 2026-11-12). The Hyprland rules in omarchohard.lua use the same titles.
 declare -gA OH_WINAPPS_TITLE=(
-  [word]='^(.+ - Word|Microsoft Word)$'
-  [excel]='^(.+ - Excel|Microsoft Excel)$'
-  [powerpoint]='^(.+ - PowerPoint|Microsoft PowerPoint)$'
-  [outlook]='^(.+- Outlook|Outlook)$'
-  [onenote]='^(.+ - OneNote|OneNote)$'
+  [word]='^(.+ - (Microsoft )?Word|Microsoft Word)$'
+  [excel]='^(.+ - (Microsoft )?Excel|Microsoft Excel)$'
+  [powerpoint]='^(.+ - (Microsoft )?PowerPoint|Microsoft PowerPoint)$'
+  [outlook]='^(.+- (Microsoft )?Outlook|Outlook)$'
+  [onenote]='^(.+ - (Microsoft )?OneNote|OneNote)$'
 )
 # The hidden window each RemoteApp session keeps open.
 OH_RDP_MARKER='RemoteApp Marker Window'

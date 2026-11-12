@@ -340,7 +340,8 @@ desktop_preferred() {
 [{"class":"chrome-word.cloud.microsoft__-Default","title":"Microsoft Word","address":"0x9"},
  {"class":"Microsoft Excel","title":"RemoteApp Marker Window","address":"0x1"},
  {"class":"Microsoft Excel","title":"Report.docx - Word","address":"0x2"},
- {"class":"Microsoft Excel","title":"Budget.xlsx - Excel","address":"0x3"},
+ {"class":"Microsoft Excel","title":"Bakery Budget.xlsx - Microsoft Excel","address":"0x3"},
+ {"class":"Microsoft Excel","title":"Spring Launch.pptx - Microsoft PowerPoint","address":"0x6"},
  {"class":"Microsoft Excel","title":"Inbox - ada@example.com - Outlook","address":"0x4"},
  {"class":"Microsoft Excel","title":"OneNote","address":"0x5"}]
 JSON
@@ -356,12 +357,15 @@ JSON
   focused 0x4
   run "$OH" open --app onenote
   focused 0x5
+  # Live RemoteApp titles name the app in full: "Bakery Budget.xlsx - Microsoft Excel".
   run "$OH" open --app powerpoint
-  [ "$output" = 'would run: winapps powerpoint-o365' ]
+  focused 0x6
   # With only the web app and the marker open, Word starts.
   printf '[{"class":"chrome-word.cloud.microsoft__-Default","title":"Microsoft Word","address":"0x9"},{"class":"Microsoft Word","title":"RemoteApp Marker Window","address":"0x1"}]' >"$HOME/clients.json"
   run "$OH" open --app word
   [ "$output" = 'would run: winapps word-o365' ]
+  run "$OH" open --app powerpoint
+  [ "$output" = 'would run: winapps powerpoint-o365' ]
   # Teams has no desktop version here; it stays the web app.
   run "$OH" open --app teams
   [[ $output == *"--app=https://teams.cloud.microsoft/"* ]]
@@ -531,8 +535,8 @@ winapps_setup_stub() {
   [ -L "$conf" ]
   rules=$XDG_CONFIG_HOME/hypr/omarchohard.lua
   grep -qxF 'o.window({ title = "^RemoteApp Marker Window$" }, { workspace = "special:omarchohard silent", no_focus = true })' "$rules"
-  grep -qxF 'o.window({ title = "^(.+ - Word|Microsoft Word)$" }, { tag = "-default-opacity", opacity = "1 1" })' "$rules"
-  grep -qxF 'o.window({ title = "^(.+- Outlook|Outlook)$" }, { tag = "-default-opacity", opacity = "1 1" })' "$rules"
+  grep -qxF 'o.window({ title = "^(.+ - (Microsoft )?Word|Microsoft Word)$" }, { tag = "-default-opacity", opacity = "1 1" })' "$rules"
+  grep -qxF 'o.window({ title = "^(.+- (Microsoft )?Outlook|Outlook)$" }, { tag = "-default-opacity", opacity = "1 1" })' "$rules"
   [ "$(grep -c 'opacity = "1 1"' "$rules")" -eq 5 ]
   # The guarded line runs and loads all six rules, where Lua is at hand.
   if command -v lua5.4 >/dev/null; then
