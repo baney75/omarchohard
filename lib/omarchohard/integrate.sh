@@ -280,9 +280,9 @@ oh_uninstall() {
   [[ ${1:-} == --purge ]] && purge=1
   abraunegg_conf=${XDG_CONFIG_HOME:-$HOME/.config}/onedrive/config
   # Stop the services before their unit files go, or they keep running.
-  oh_prewarm off >/dev/null 2>&1 || true
-  # Before anything is removed, plain or --purge.
+  # OneDrive first: it stops the run before anything is removed.
   oh_onedrive_stop_or_die
+  oh_prewarm off >/dev/null 2>&1 || true
   if ((purge)); then
     oh_onedrive remove --quiet || oh_warn "OneDrive was not fully removed; check: omarchohard onedrive status"
   elif [[ -n $(oh_config_get onedrive_client) ]]; then

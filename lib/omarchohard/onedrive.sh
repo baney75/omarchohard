@@ -253,7 +253,9 @@ oh_onedrive_running() {
   local dir
   systemctl --user is-active --quiet "$OH_ONEDRIVE_UNIT" 2>/dev/null && return 0
   dir=$(oh_config_get onedrive_dir)
-  [[ -n $dir ]] && mountpoint -q -- "$dir" 2>/dev/null && return 0
+  # Only the rclone client mounts; an abraunegg folder may be any disk.
+  [[ $(oh_config_get onedrive_client) != abraunegg && -n $dir ]] &&
+    mountpoint -q -- "$dir" 2>/dev/null && return 0
   # The rclone mount's control socket is named for omarchohard.
   pgrep -u "$UID" -f 'omarchohard-rclone\.sock' >/dev/null 2>&1 && return 0
   [[ $(oh_config_get onedrive_client) == abraunegg ]] &&
