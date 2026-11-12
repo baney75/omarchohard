@@ -198,7 +198,9 @@ omarchohard share --link --edit Budget.xlsx # an edit link
 - `--link` asks OneDrive for a link, prints it and copies it with `wl-copy`.
   School and work accounts get a link for people in the organization, since
   many tenants turn off links for anyone; personal accounts get a link anyone
-  can open. Override with `--org` or `--anyone`.
+  can open. Override with `--org` or `--anyone`. When anyone links are off,
+  an anyone link falls back to the organization; a failed organization link
+  stops with an error and never becomes one anyone can open.
 - A file outside OneDrive is copied into `OneDrive/Omarchohard/` first, as
   when opening one.
 - In Files (Nautilus), right-click a file, then **Scripts**: **Share with
