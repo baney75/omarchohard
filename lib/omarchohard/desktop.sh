@@ -367,13 +367,16 @@ oh_desktop_log_text() {
   printf '%s\n' "${s//[[:cntrl:]]/}"
 }
 
-# Something accepts connections on the RDP port. Docker's own proxy can accept
-# before Windows listens, so this alone never means Windows is ready.
+# Windows answers on the RDP port. Docker's own proxy accepts a connection
+# before Windows listens, so this sends an RDP connection request (X.224) and
+# needs the reply's TPKT header, 03 00, which only an RDP server sends.
 oh_desktop_rdp_up() {
   oh_winapps_conf_load || true
   [[ ${OH_WA[RDP_IP]} =~ ^[0-9A-Za-z.:-]+$ && ${OH_WA[RDP_PORT]} =~ ^[0-9]+$ ]] || return 1
   # shellcheck disable=SC2016 # expanded by the inner bash
-  timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "${OH_WA[RDP_IP]}" "${OH_WA[RDP_PORT]}" 2>/dev/null
+  timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2" || exit 1
+    printf "\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00" >&3
+    [[ $(head -c 2 <&3 | od -An -tx1 | tr -d " \n") == 0300 ]]' _ "${OH_WA[RDP_IP]}" "${OH_WA[RDP_PORT]}" 2>/dev/null
 }
 
 # office-status.json, written in Windows. Read as data: unknown phases are

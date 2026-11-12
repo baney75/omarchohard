@@ -201,11 +201,18 @@ esac'
 }
 
 # Something listening where winapps.conf says RDP is, like Windows once it is up.
+# A local RDP port. By default it answers a connection request the way
+# Windows does; `rdp_listen proxy` accepts and hangs up, like Docker's proxy
+# before Windows listens.
 rdp_listen() {
   python3 -c 'import socket,sys
 s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(8)
 open(sys.argv[1], "w").write(str(s.getsockname()[1]))
-while True: s.accept()[0].close()' "$BATS_TEST_TMPDIR/rdp.port" 3>&- &
+while True:
+    c = s.accept()[0]
+    if sys.argv[2] != "proxy":
+        c.recv(64); c.sendall(bytes.fromhex("0300001300d0000012340002000800000000"))
+    c.close()' "$BATS_TEST_TMPDIR/rdp.port" "${1:-rdp}" 3>&- &
   RDP_PID=$!
   for _ in $(seq 50); do
     [ -s "$BATS_TEST_TMPDIR/rdp.port" ] && break
@@ -237,6 +244,12 @@ teardown() {
   [ "$(phase)" = installing-office ]
   office_status ready
   [ "$(phase)" = starting ]
+  # Docker's proxy takes the connection before Windows listens: not ready.
+  rdp_listen proxy
+  [ "$(phase)" = starting ]
+  [ "$("$OH" desktop status --json | jq -r .rdp)" = false ]
+  kill "$RDP_PID"
+  rm "$BATS_TEST_TMPDIR/rdp.port"
   rdp_listen
   run "$OH" desktop status --json
   [ "$(jq -r '.phase, .rdp, .office.version, .office.channel' <<<"$output" | tr '\n' ' ')" = "ready true 16.0.19328.20100 Current " ]
