@@ -13,9 +13,10 @@ curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh
 Run from a terminal, that one line installs the CLI and starts a short guided
 setup. Its first question is which Office you want:
 
-- **Desktop Office**: the real Windows apps, with add-ins, macros, printing to your Linux printers, offline
-  use and Office's own updates. A one-time install of about 45 minutes; needs
-  KVM, 16 GB of memory and about 80 GB of disk.
+- **Desktop Office**: the real Windows apps, with add-ins, macros, printing
+  to your Linux printers, offline use and Office's own updates. A one-time
+  install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of
+  disk.
 - **Web apps**: Microsoft's web apps as app windows. Ready in about two
   minutes and light on memory.
 
