@@ -37,7 +37,7 @@ oh_doctor_app() {
     oh_doc fail "$name launcher" "$(desktop-file-validate "$file" 2>&1 | head -n1)"
     return
   fi
-  exec_bin=$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' "$file" | head -n1)
+  exec_bin=$(oh_desktop_exec_program "$(sed -n 's/^Exec=//p' "$file" | head -n1)")
   if [[ ! -x $exec_bin ]]; then
     oh_doc fail "$name launcher" "Exec points at $exec_bin, which is not executable"
     return

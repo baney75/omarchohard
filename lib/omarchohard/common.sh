@@ -152,3 +152,53 @@ oh_refresh_desktop_db() {
   oh_have update-desktop-database && update-desktop-database "$OH_APPS_DIR" >/dev/null 2>&1 || true
   oh_have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$OH_ICON_DIR" >/dev/null 2>&1 || true
 }
+
+# One argument of a systemd Exec line: in double quotes, with \ and " escaped,
+# and % and $ doubled so systemd reads them as text, not specifiers or variables.
+oh_unit_arg() {
+  local s=$1 bs=\\
+  s=${s//"$bs"/"$bs$bs"}
+  s=${s//\"/"$bs\""}
+  s=${s//'%'/%%}
+  s=${s//\$/\$\$}
+  printf '"%s"' "$s"
+}
+
+# One argument of a desktop entry's Exec key, quoted only when the Desktop
+# Entry spec requires it. Inside quotes, " ` $ and \ take a backslash, then
+# every backslash is doubled again by the string escaping of the value.
+oh_desktop_exec_arg() {
+  local s=$1 bs=\\
+  s=${s//'%'/%%}
+  case $s in
+  *[[:space:]\"\'\\\<\>\~\|\&\;\$\*\?\#\(\)\`]*)
+    s=${s//"$bs"/"$bs$bs"}
+    s=${s//\"/"$bs\""}
+    s=${s//\`/"$bs\`"}
+    s=${s//\$/"$bs\$"}
+    s=${s//"$bs"/"$bs$bs"}
+    printf '"%s"' "$s"
+    ;;
+  *) printf '%s' "$s" ;;
+  esac
+}
+
+# The program of a desktop entry's Exec value, with that quoting undone.
+oh_desktop_exec_program() {
+  local v=$1 out='' c i bs=\\
+  v=${v//"$bs$bs"/"$bs"}
+  if [[ $v != \"* ]]; then
+    v=${v%% *}
+    printf '%s\n' "${v//%%/%}"
+    return 0
+  fi
+  for ((i = 1; i < ${#v}; i++)); do
+    c=${v:i:1}
+    case $c in
+    \\) ((i += 1)) && out+=${v:i:1} ;;
+    \") break ;;
+    *) out+=$c ;;
+    esac
+  done
+  printf '%s\n' "${out//%%/%}"
+}

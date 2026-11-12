@@ -151,3 +151,71 @@ app_url() {
   [ "$status" -eq 1 ]
   [[ $output == *"unknown app 'notepad'"*word* ]]
 }
+
+@test "Office links to hosts outside Microsoft 365 are refused and open nothing" {
+  unset OMARCHOHARD_DRY_RUN
+  oh_install_quiet
+  for uri in \
+    'ms-word:ofe|u|https://login-microsoftonline.evil.example/' \
+    'ms-excel:ofv|u|https://evil.example/x.xlsx' \
+    'ms-powerpoint:ofe|u|https://evil.example/x.sharepoint.com' \
+    'onenote:https://evil.example/notebook' \
+    'ms-word:ofe|u|https://user@contoso.sharepoint.com.evil.example/' \
+    'ms-word:ofe|u|https://contoso.sharepoint.com.evil.example/' \
+    'ms-word:ofe|u|https://contoso.sharepoint.com@evil.example/' \
+    'ms-word:ofe|u|https://user@contoso.sharepoint.com/' \
+    'ms-word:ofe|u|https://evil.example\x.sharepoint.com/' \
+    'ms-excel:ofe|u|https://evilsharepoint.com/b.xlsx'; do
+    run "$OH" open "$uri"
+    [ "$status" -eq 1 ] || {
+      echo "not refused: $uri"
+      false
+    }
+    [[ $output == *"unsupported Office link"* ]]
+  done
+  run xdg-open 'ms-word:ofe|u|https://evil.example/'
+  sleep 0.5
+  [ ! -e "$HOME/chromium.log" ]
+}
+
+@test "Office links to Microsoft 365 hosts open, OneNote links included" {
+  oh_install_quiet
+  run "$OH" open 'ms-word:ofe|u|https://contoso.sharepoint.com:443/sites/a/Plan.docx'
+  [ "$status" -eq 0 ]
+  [ "$(app_url)" = 'https://contoso.sharepoint.com:443/sites/a/Plan.docx' ]
+  run xdg-open 'onenote:https://contoso.sharepoint.com/sites/team/SiteAssets/Notebook'
+  [ "$status" -eq 0 ]
+  [ "$(app_url)" = 'https://contoso.sharepoint.com/sites/team/SiteAssets/Notebook' ]
+  run "$OH" open 'ms-excel:ofv|u|https://onedrive.live.com/edit?id=1'
+  [ "$(app_url)" = 'https://onedrive.live.com/edit?id=1' ]
+  run "$OH" open 'ms-powerpoint:ofe|u|https://1drv.ms/p/abc'
+  [ "$(app_url)" = 'https://1drv.ms/p/abc' ]
+}
+
+@test "with desktop Office preferred, an Office link still opens its document in the web app" {
+  # shellcheck disable=SC2016
+  stub winapps 'printf "%s\n" "$*" >>"$HOME/winapps.log"'
+  mkdir -p "$XDG_CONFIG_HOME/winapps" "$XDG_DATA_HOME/omarchohard/vm"
+  : >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  : >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  printf 'open_with=desktop\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  run "$OH" open 'ms-word:ofe|u|https://contoso.sharepoint.com/Plan.docx'
+  [ "$status" -eq 0 ]
+  [ "$(app_url)" = 'https://contoso.sharepoint.com/Plan.docx' ]
+  [[ $output != *winapps* ]]
+}
+
+@test "launch falls back to focuswindow when Hyprland rejects hl.dsp.focus" {
+  unset OMARCHOHARD_DRY_RUN
+  # shellcheck disable=SC2016
+  stub hyprctl 'printf "%s\n" "$*" >>"$HOME/hyprctl.log"
+case "$1" in
+clients) echo "[{\"class\":\"chrome-word.cloud.microsoft__-Default\",\"address\":\"0xabc\"}]" ;;
+dispatch) case "$2" in hl.dsp.*) echo "error: unknown dispatcher" ;; *) echo ok ;; esac ;;
+esac'
+  run "$OH" launch word
+  [ "$status" -eq 0 ]
+  grep -qx 'dispatch focuswindow address:0xabc' "$HOME/hyprctl.log"
+  sleep 0.3
+  [ ! -e "$HOME/chromium.log" ]
+}

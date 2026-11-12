@@ -73,11 +73,17 @@ oh_window_class_regex() {
 }
 
 oh_focus_existing() {
-  local re=$1 address
+  local re=$1 address reply
   oh_have hyprctl && oh_have jq || return 1
   address=$(hyprctl clients -j 2>/dev/null | jq -r --arg re "$re" 'first(.[] | select(.class | test($re))) | .address' 2>/dev/null) || return 1
   [[ -n $address && $address != null ]] || return 1
-  oh_run hyprctl dispatch "hl.dsp.focus({ window = \"address:$address\" })" >/dev/null
+  oh_dry && return 0
+  # Hyprland with the Lua config takes hl.dsp.focus; older builds take the
+  # classic focuswindow. A rejected dispatch can still exit 0, so read the reply.
+  reply=$(hyprctl dispatch "hl.dsp.focus({ window = \"address:$address\" })" 2>&1) &&
+    [[ $reply != *[Ee]rror* && $reply != *[Ii]nvalid* ]] && return 0
+  reply=$(hyprctl dispatch focuswindow "address:$address" 2>&1) &&
+    [[ $reply != *[Ee]rror* && $reply != *[Ii]nvalid* ]]
 }
 
 # Open URL in an app window. With focus=1, raise an existing window instead.
@@ -156,7 +162,7 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-ExecStart=$bin --user-data-dir=$OH_DATA_DIR/browser --profile-directory=$OH_PROFILE_NAME --no-first-run --no-default-browser-check --no-startup-window --keep-alive-for-test
+ExecStart=$(oh_unit_arg "$bin") $(oh_unit_arg "--user-data-dir=$OH_DATA_DIR/browser") --profile-directory=$OH_PROFILE_NAME --no-first-run --no-default-browser-check --no-startup-window --keep-alive-for-test
 Restart=on-failure
 RestartSec=5
 

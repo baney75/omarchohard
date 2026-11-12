@@ -63,17 +63,40 @@ oh_mailto_url() {
   printf '%s\n' "$url"
 }
 
+# Hosts an Office link may open. A link names any URL it likes, so anything
+# else is refused rather than opened in an app window with Office's icon.
+OH_OFFICE_HOSTS='sharepoint.com sharepoint-df.com cloud.microsoft office.com office365.com officeapps.live.com live.com microsoft.com microsoftonline.com 1drv.ms'
+
+oh_office_url_allowed() {
+  local url=$1 host suffix
+  [[ $url == https://* ]] || return 1
+  host=${url#https://}
+  host=${host%%[/?#]*}
+  # user@host can make a link read like a Microsoft address; never accept it.
+  [[ $host != *@* ]] || return 1
+  host=${host%:*}
+  host=${host,,}
+  # Letters, digits, dots and hyphens only: a browser reads \ as /, so
+  # evil.example\x.sharepoint.com is evil.example.
+  [[ $host =~ ^[a-z0-9.-]+$ ]] || return 1
+  for suffix in $OH_OFFICE_HOSTS; do
+    [[ $host == "$suffix" || $host == *."$suffix" ]] && return 0
+  done
+  return 1
+}
+
 # Office URI scheme: ms-word:ofe|u|https://host/doc.docx (SharePoint "Open in
-# app" buttons). Desktop Office takes it when installed; otherwise the web app.
+# app" buttons) and onenote:https://host/... . The document opens in the web
+# app even with open_with=desktop: WinApps starts desktop Office without the
+# document, which would show an empty Word.
 oh_open_office_uri() {
   local uri=$1 url
-  url=${uri#*|u|}
-  [[ $url == https://* ]] || oh_die "unsupported Office link: $uri"
-  if [[ $(oh_config_get open_with) == desktop ]] && oh_desktop_ready; then
-    oh_desktop_open_url "$uri"
-  else
-    oh_app_window "$url" 0
-  fi
+  case $uri in
+  onenote:*) url=${uri#onenote:} ;;
+  *) url=${uri#*|u|} ;;
+  esac
+  oh_office_url_allowed "$url" || oh_die "unsupported Office link (only https links to Microsoft 365 hosts open): $uri"
+  oh_app_window "$url" 0
 }
 
 oh_open_file() {

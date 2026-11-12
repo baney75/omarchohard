@@ -7,6 +7,14 @@ $work = 'C:\OEM\odt'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Invoke-WebRequest -UseBasicParsing -Uri 'https://officecdn.microsoft.com/pr/wsus/setup.exe' -OutFile "$work\setup.exe"
 
+# Run it only if Microsoft signed it.
+$sig = Get-AuthenticodeSignature "$work\setup.exe"
+if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+  Remove-Item -Force "$work\setup.exe"
+  Write-Output "office: refused setup.exe: signature is $($sig.Status), signed by '$($sig.SignerCertificate.Subject)'"
+  exit 1
+}
+
 # Every product omarchohard offers is a Retail SKU, and Retail SKUs install from Current.
 $channel = 'Current'
 

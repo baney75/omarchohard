@@ -11,6 +11,9 @@
 # Product keys are never put on a command line, in the config, or in a log.
 # They are read from a file or a hidden prompt, written to a 0600 request file
 # that the VM reads and deletes, and the host deletes it again afterward.
+#
+# The VM shares the whole home folder (dockur's /shared), so Windows can read
+# every file under ~, config files included. See docs/desktop-tier.md.
 
 OH_WINAPPS_REF=0b950dc4b823a759015c549a46c35aaaf31c77c0
 OH_VM_DIR=$OH_DATA_DIR/vm
@@ -57,7 +60,8 @@ oh_mem_kib() { awk -v k="$1" '$1 == k":" { print $2 }' /proc/meminfo; }
 # Preflight. Prints each result; returns 1 if the host cannot run the VM well.
 oh_desktop_check() {
   local bad=0 total avail free_gb engine
-  total=$(($(oh_mem_kib MemTotal) / 1048576))
+  # MiB: the kernel keeps some memory back, so a 16 GB machine shows about 15.4 GiB.
+  total=$(($(oh_mem_kib MemTotal) / 1024))
   avail=$(($(oh_mem_kib MemAvailable) / 1048576))
   free_gb=$(($(df --output=avail -k "$HOME" | tail -n1) / 1048576))
 
@@ -73,8 +77,8 @@ oh_desktop_check() {
     oh_err "FreeRDP 3 is missing: omarchy pkg add freerdp"
     bad=1
   fi
-  if ((total >= 16)); then oh_ok "memory: ${total} GiB total"; else
-    oh_err "memory: ${total} GiB total; the VM needs 4 GiB on a host with at least 16 GiB"
+  if ((total >= 15360)); then oh_ok "memory: $(((total + 512) / 1024)) GiB total"; else
+    oh_err "memory: $(((total + 512) / 1024)) GiB total; the VM needs 4 GiB on a host with at least 16 GiB"
     bad=1
   fi
   if ((avail >= 6)); then oh_ok "memory free now: ${avail} GiB"; else
@@ -88,8 +92,18 @@ oh_desktop_check() {
   ((bad == 0))
 }
 
+# A value inside a YAML double-quoted string that compose reads: escape \ and ",
+# and $ is compose interpolation.
+oh_compose_str() {
+  local s=$1 bs=\\
+  s=${s//"$bs"/"$bs$bs"}
+  s=${s//\"/"$bs\""}
+  s=${s//\$/\$\$}
+  printf '%s' "$s"
+}
+
 oh_desktop_install() {
-  local windows=11e office=m365 ram=4G force=0 user pass engine
+  local windows=11e office=m365 ram=4G force=0 user pass engine line tpl
   while (($#)); do
     case $1 in
     --windows)
@@ -128,11 +142,16 @@ oh_desktop_install() {
   oh_run git -C "$OH_WINAPPS_DIR" checkout --quiet "$OH_WINAPPS_REF"
 
   # A local-only Windows account for RDP. The VM listens on 127.0.0.1 only.
-  user=omarchohard
+  user=omarchohard pass=''
   if [[ -f $OH_WINAPPS_CONF ]]; then
     oh_warn "keeping your existing $OH_WINAPPS_CONF"
-    pass=$(sed -n 's/^RDP_PASS="\(.*\)"$/\1/p' "$OH_WINAPPS_CONF")
-    user=$(sed -n 's/^RDP_USER="\(.*\)"$/\1/p' "$OH_WINAPPS_CONF")
+    # The local VM account omarchohard manages. Parsed in bash so the password never reaches argv.
+    while IFS= read -r line || [[ -n $line ]]; do
+      case $line in
+      RDP_PASS=\"*\") pass=${line#RDP_PASS=\"} pass=${pass%\"} ;;
+      RDP_USER=\"*\") user=${line#RDP_USER=\"} user=${user%\"} ;;
+      esac
+    done <"$OH_WINAPPS_CONF"
   else
     pass=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     mkdir -p "${OH_WINAPPS_CONF%/*}"
@@ -168,8 +187,16 @@ EOF
   [[ $OH_VM_INBOX == "$HOME"/* ]] || oh_die "the VM inbox must be under your home folder (it is shared with the VM)"
   # shellcheck disable=SC1003 # '\\' is one backslash to tr
   printf '%s\n' "${OH_VM_INBOX#"$HOME"/}" | tr '/' '\\' >"$OH_VM_DIR/oem/inbox-path.txt"
-  sed -e "s|@VERSION@|$windows|" -e "s|@RAM@|$ram|" -e "s|@USER@|$user|" -e "s|@PASS@|$pass|" \
-    "$OH_SHARE/vm/compose.yaml.in" >"$OH_VM_DIR/compose.yaml"
+  # Built in bash, not sed, so the password is never in a process's arguments.
+  tpl=$(<"$OH_SHARE/vm/compose.yaml.in")
+  tpl=${tpl//@VERSION@/"$windows"}
+  tpl=${tpl//@RAM@/"$ram"}
+  tpl=${tpl//@USER@/"$(oh_compose_str "$user")"}
+  tpl=${tpl//@PASS@/"$(oh_compose_str "$pass")"}
+  (
+    umask 077
+    printf '%s\n' "$tpl" >"$OH_VM_DIR/compose.yaml"
+  )
   chmod 600 "$OH_VM_DIR/compose.yaml"
 
   oh_config_set desktop_office "$office"
@@ -203,17 +230,6 @@ oh_desktop_open_file() {
   oh_spawn winapps "$wa" "$file"
 }
 
-oh_desktop_open_url() {
-  local uri=$1 app
-  case $uri in
-  ms-word:*) app=word ;;
-  ms-excel:*) app=excel ;;
-  ms-powerpoint:*) app=powerpoint ;;
-  *) app=onenote ;;
-  esac
-  oh_spawn winapps "${OH_WINAPPS_APP[$app]}"
-}
-
 # Read a key without echoing it. Accepts XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
 oh_desktop_read_key() {
   local file=$1 label=$2 key
@@ -236,22 +252,29 @@ oh_desktop_request() {
   req=$OH_VM_INBOX/$id.request
   result=$OH_VM_INBOX/$id.result
   mkdir -p "$OH_VM_INBOX"
+  # Ctrl-C, a kill or the timeout must not leave the key in the shared folder.
+  # shellcheck disable=SC2064 # expand now: req is local
+  trap "rm -f -- $(printf '%q ' "$req" "$req.tmp")" EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # The key is already checked to be [A-Z0-9-] and the action is a fixed word,
+  # so the printf builtin writes valid JSON and no process sees the key.
   (
     umask 077
-    jq -cn --arg a "$action" --arg k "$key" '{action:$a,key:$k}' >"$req.tmp"
+    printf '{"action":"%s","key":"%s"}\n' "$action" "$key" >"$req.tmp"
     mv "$req.tmp" "$req"
   )
   oh_say "Sent to the VM; waiting for Windows to apply it (up to 3 minutes)..."
   for ((i = 0; i < 180; i++)); do
     if [[ -f $result ]]; then
       rm -f "$req"
+      trap - EXIT INT TERM
       cat "$result"
       rm -f "$result"
       return 0
     fi
     sleep 1
   done
-  rm -f "$req"
   oh_die "the VM did not answer. Is it running? (omarchohard desktop up)"
 }
 
