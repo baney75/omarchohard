@@ -8,6 +8,41 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+### Added
+
+- Setup asks which Office you want: desktop Office (the real Windows apps in
+  a Windows VM) or the web apps, and recommends desktop Office only when
+  `desktop check` passes. `setup --tier desktop|web` for scripts; `--yes`
+  without `--tier` stays `web`. Desktop runs `desktop install --wait` and
+  still sets up the web apps, for Teams. `probe` reports `recommend.tier`,
+  `desktop_installed` and `config.open_with`.
+- `omarchohard desktop status [--json]` reports the install phase, from
+  downloading Windows to ready, and `desktop install --wait` and
+  `desktop wait` follow it for up to 90 minutes, then add the Office apps to
+  the launcher and turn `prefer on`. Ctrl-C stops the watching, not the VM.
+  The Office install in Windows writes `office-status.json` to the inbox.
+- `omarchohard open --app word` (and the other Office apps) raises an open
+  desktop Office window or starts it, when the desktop tier is preferred.
+- `omarchohard desktop run FILE` opens a file in Windows, such as an Office
+  add-in, with FreeRDP reading the password from standard input. An Open in
+  Windows entry handles `.xll`, `.xlam`, `.ppam`, `.dotm` and `.vsto` files.
+- `omarchohard desktop update [--channel current|monthly|semi-annual]
+  [--to VERSION]` updates Office now and starts a Windows Update scan, and
+  `omarchohard update` points to it.
+- `omarchohard doctor` checks the VM, the install phase, RDP, the Office
+  version and channel, the WinApps launchers and `open_with`.
+
+### Changed
+
+- New desktop VMs keep their disk in `~/.local/share/omarchohard/vm/storage`
+  with copy-on-write off on btrfs, instead of a Docker volume. Existing VMs
+  keep their volume. `desktop remove --delete-vm` deletes the folder.
+- The dockur/windows image is pinned to `6.06` instead of `latest`.
+- Office in the VM installs with updates on, on the chosen channel, and the
+  install fails loudly when Office's installer does.
+- The README leads with desktop Office and keeps the web apps as the light
+  option.
+
 ## [0.1.1] - 2026-11-11
 
 ### Fixed

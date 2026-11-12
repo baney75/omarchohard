@@ -60,7 +60,7 @@ Teams runs in the browser, so the browser owns the camera and microphone.
 ## Hyprland window classes
 
 Chromium names each app window `chrome-<host>__<path>-<Profile>`: dots stay,
-slashes in the path become underscores, and the profile is `Default` for
+each slash in the path becomes `_`, and the profile is `Default` for
 your everyday profile or `Omarchohard` with `--isolated`.
 
 | App | Class (default profile) |

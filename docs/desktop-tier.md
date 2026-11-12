@@ -1,7 +1,8 @@
 # Desktop tier (experimental)
 
 **Status: experimental and untested.** Every command below exists and is
-linted, but the tier has not been run end to end. On the test laptop,
+linted and tested against stub Docker and FreeRDP, but the tier has not been
+run end to end. End-to-end run in progress. On the test laptop,
 it was not run because the machine had about 7 GiB free of 31 GiB with 25 GiB
 of swap in use; the preflight refuses below 6 GiB free. Expect rough edges,
 and keep anything you care about in OneDrive.
@@ -55,9 +56,24 @@ kernel keeps some memory back, so the check accepts 15 GiB or more.
 
 ## Install
 
+The simple way is setup, which asks which Office you want and recommends
+desktop Office only when `desktop check` passes:
+
+```sh
+omarchohard setup                    # step 1 asks: desktop Office or the web apps
+omarchohard setup --yes --tier desktop
+```
+
+`--tier desktop` runs `desktop install --wait` after the other steps and still
+sets up the web apps, for Teams. `--yes` without `--tier` means `web`. If the
+desktop install does not finish, setup says so and exits 1; the web apps work
+meanwhile.
+
+By hand:
+
 ```sh
 omarchohard desktop check
-omarchohard desktop install                    # Windows 11 evaluation + Microsoft 365
+omarchohard desktop install --wait             # Windows 11 evaluation + Microsoft 365
 omarchohard desktop install --windows 11 --office 2024
 ```
 
@@ -67,14 +83,101 @@ omarchohard desktop install --windows 11 --office 2024
 | `--office` | `m365` (Microsoft 365 Apps for enterprise, for school and work accounts), `m365-home` (Microsoft 365 Personal or Family), `2024` (Office Professional Plus 2024, ODT id `ProPlus2024Retail`), `home2024` (Office Home 2024, ODT id `Home2024Retail`), `homebusiness2024` (Office Home & Business 2024, ODT id `HomeBusiness2024Retail`), `2021` (Office Professional Plus 2021) | `m365` |
 | `--ram` | VM memory, such as `4G` or `6G` | `4G` |
 
-Windows installs itself in 20 to 40 minutes; watch it at
-<http://127.0.0.1:8006>. Office installs right after Windows. Then:
+The whole install takes about 45 minutes: Windows installs itself in 20 to
+40, then Office installs. Watch the Windows screen at <http://127.0.0.1:8006>
+if you like.
+
+### Progress
+
+`omarchohard desktop status` (or `--json`) names the phase:
+
+| Phase | Meaning |
+| --- | --- |
+| `not-installed` | No VM yet |
+| `downloading-windows` | dockur is downloading or checking the Windows image |
+| `installing-windows` | Windows Setup is running in the VM |
+| `installing-office` | Windows is up and the Office installer runs |
+| `starting` | Office is installed, RDP does not answer yet |
+| `ready` | Office is installed and RDP answers |
+| `failed` | Windows or Office stopped with an error (in `detail`) |
+| `stopped`, `paused` | The VM is not running, or is paused |
+
+The phase comes from the container state, the dockur log, a check of the RDP
+port and `office-status.json`, which the Office install script in Windows
+writes to the inbox with the phase, product, version, channel and any error.
+An open RDP port alone never counts as ready: the container engine can accept
+connections before Windows does.
+
+`install --wait` prints each change of phase. It stops after 90 minutes, and
+Ctrl-C stops only the watching; the VM keeps going. Pick it up again with
+`omarchohard desktop wait`. When Office is ready it runs WinApps' setup for
+the officially supported apps, which adds Word, Excel, PowerPoint, Outlook and
+OneNote to the launcher, and turns `prefer on`. Without `--wait`, run
+`omarchohard desktop wait` later, or by hand:
 
 ```sh
 omarchohard desktop apps         # WinApps scans the VM; choose the Office apps
 omarchohard desktop prefer on    # local Office files open in desktop Office
 omarchohard desktop up | down    # start or stop the VM
 ```
+
+### Storage
+
+The VM disk lives in `~/.local/share/omarchohard/vm/storage`, a plain folder,
+so `desktop remove --delete-vm` can find it and backups can skip it. On btrfs
+the install turns off copy-on-write for that folder (`chattr +C`) before the
+first start, because a copy-on-write disk image fragments and Windows Setup
+can fail on it. If `chattr` fails, the install warns and goes on. VMs
+installed before 0.2.0 keep their Docker volume (`data`); the install
+detects the old `compose.yaml` and leaves it in place.
+
+The image is pinned to `ghcr.io/dockur/windows:6.06`.
+
+VMs installed before 0.2.0 also keep their old first-boot scripts in
+`C:\OEM`. Those do not write `office-status.json` and do not know the
+update requests, so `desktop status` falls back to the log and the launchers,
+and `desktop update` answers "unknown action". `desktop remove --delete-vm`
+and a new install bring the new scripts.
+
+## Using desktop Office
+
+- `omarchohard open --app word` (and `excel`, `powerpoint`, `outlook`,
+  `onenote`) raises the open window of that app, found by its window class
+  (`Microsoft Word` and so on) through `hyprctl`, or starts it through
+  WinApps. With a file it always opens the file. Teams stays a web app.
+- `omarchohard desktop run FILE` opens any file in Windows with the program
+  Windows picks: an add-in (`.xll`, `.xlam`, `.ppam`, `.dotm`, `.vsto`), an
+  installer or a document. It runs `explorer.exe` as a RemoteApp on the file's
+  `\\tsclient\home` path. Files must be under your home folder or
+  `/run/media`, and names with control characters are refused. The
+  connection details come from `~/.config/winapps/winapps.conf`, read as text
+  and never run, and FreeRDP reads the password from standard input
+  (`/from-stdin:force`), so it is never on the command line.
+- The desktop tier adds an **Open in Windows** entry to Open With for those
+  add-in types. It is hidden from the launcher, and uninstall removes it.
+- WinApps' own launchers pass the RDP password to FreeRDP on its command
+  line (`/p:`), where other processes of your user can read it. That is
+  WinApps' code, pinned at `0b950dc`, not omarchohard's. WinApps' setup also
+  updates its own copy from git, so it may run a newer WinApps than the pin.
+
+## Updates
+
+Office updates itself in the background; the install configures Office's
+updates on with the channel it installed. To update now:
+
+```sh
+omarchohard desktop update                         # Office now, plus a Windows Update scan
+omarchohard desktop update --channel monthly       # current, monthly or semi-annual
+omarchohard desktop update --to 16.0.19127.20000   # a specific version
+```
+
+The request goes through the inbox. Windows checks the channel and version
+against its own allowlist again, runs `OfficeC2RClient.exe /update user` (and
+`/changesetting Channel=...` for a channel), and starts
+`UsoClient StartInteractiveScan` for Windows Update. The result shows the
+version and channel and never contains a key. `omarchohard update` prints a
+one-line reminder of this command, and `omarchohard doctor` shows the Office
+version and channel.
 
 The VM listens on 127.0.0.1 only (8006 for the web viewer, 3389 for RDP).
 Its Windows account is local, with a random 20-character password stored in
@@ -132,8 +235,21 @@ omarchohard desktop remove              # stop the VM; keep its disk
 omarchohard desktop remove --delete-vm  # delete the VM disk (asks you to type DELETE)
 ```
 
+`--delete-vm` deletes the storage folder as well. If Windows wrote files
+there as root, it says to run `sudo rm -rf` on it. Both modes remove the
+Open in Windows entry.
+
 WinApps launchers come out with
 `~/.local/share/omarchohard/winapps/setup.sh --user --uninstall`.
+
+## Doctor
+
+`omarchohard doctor` checks the VM state (a paused VM counts as fine), the
+install phase, RDP, the Office version and channel, the WinApps launchers and
+the `open_with` setting. RDP that does not answer is a warning while Windows
+installs and a failure after that.
+
+## Uninstall
 
 `omarchohard uninstall --purge` leaves the VM in place and says so; remove
 it with `omarchohard desktop remove --delete-vm`.
