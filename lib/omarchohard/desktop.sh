@@ -21,6 +21,8 @@ OH_VM_DIR=$OH_DATA_DIR/vm
 OH_WINAPPS_DIR=$OH_DATA_DIR/winapps
 OH_VM_INBOX=$OH_DATA_DIR/vm-inbox
 OH_WINAPPS_CONF=${XDG_CONFIG_HOME:-$HOME/.config}/winapps/winapps.conf
+OH_VM_NAME=WinApps
+OH_OFFICE_STATUS=$OH_VM_INBOX/office-status.json
 
 declare -gA OH_OFFICE_PRODUCT=(
   [m365]=O365ProPlusRetail
@@ -134,7 +136,7 @@ oh_desktop_storage() {
 }
 
 oh_desktop_install() {
-  local windows=11e office=m365 ram=4G force=0 legacy=0 user pass engine tpl
+  local windows=11e office=m365 ram=4G force=0 wait=0 legacy=0 user pass engine tpl
   while (($#)); do
     case $1 in
     --windows)
@@ -150,6 +152,7 @@ oh_desktop_install() {
       shift
       ;;
     --force) force=1 ;;
+    --wait) wait=1 ;;
     *) oh_die "unknown desktop install option: $1" ;;
     esac
     shift
@@ -207,7 +210,7 @@ EOF
   cp "$OH_WINAPPS_DIR"/oem/* "$OH_VM_DIR/oem/" 2>/dev/null || true
   [[ -f $OH_VM_DIR/oem/install.bat && ! -f $OH_VM_DIR/oem/winapps-install.bat ]] &&
     mv "$OH_VM_DIR/oem/install.bat" "$OH_VM_DIR/oem/winapps-install.bat"
-  cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_VM_DIR/oem/"
+  cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/office-info.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_VM_DIR/oem/"
   printf '%s\n' "${OH_OFFICE_PRODUCT[$office]}" >"$OH_VM_DIR/oem/office-product.txt"
   [[ $OH_VM_INBOX == "$HOME"/* ]] || oh_die "the VM inbox must be under your home folder (it is shared with the VM)"
   # shellcheck disable=SC1003 # '\\' is one backslash to tr
@@ -237,16 +240,206 @@ EOF
   oh_config_set desktop_office "$office"
   oh_desktop_compose up -d
   oh_say ""
-  oh_ok "Windows is installing itself in the VM. This takes 20 to 40 minutes."
+  oh_ok "Windows is installing itself in the VM. With Office, this takes about 45 minutes."
   oh_say "Watch it at http://127.0.0.1:8006 . Office installs right after Windows."
-  oh_say "When Word appears in the VM, run: omarchohard desktop apps"
+  if ((wait)); then
+    oh_desktop_wait
+  else
+    oh_say "Follow it, and add the apps when Office is ready, with: omarchohard desktop wait"
+  fi
+}
+
+# Where the install is, from the container's state, its log, the RDP port and
+# office-status.json (written by office.ps1 in the VM). Sets OH_VM_PHASE to one
+# of not-installed downloading-windows installing-windows installing-office
+# starting ready failed stopped paused, with OH_VM_DETAIL saying more.
+oh_desktop_phase() {
+  local engine state code line logs found=''
+  OH_VM_PHASE=not-installed OH_VM_DETAIL='' OH_VM_STATE=missing OH_RDP_UP=0
+  oh_desktop_office_load || true
+  if [[ ! -f $OH_VM_DIR/compose.yaml ]]; then
+    OH_VM_DETAIL="set it up with: omarchohard desktop install --wait"
+    return 0
+  fi
+  if ! engine=$(oh_desktop_engine 2>/dev/null); then
+    OH_VM_PHASE=failed OH_VM_DETAIL="no container engine; install Docker (omarchy install docker) or Podman"
+    return 0
+  fi
+  state=$("$engine" inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$OH_VM_NAME" 2>/dev/null) || state=missing
+  code=${state#* } state=${state%% *}
+  OH_VM_STATE=$state
+  case $state in
+  missing)
+    OH_VM_PHASE=stopped OH_VM_DETAIL="the VM container does not exist (omarchohard desktop up)"
+    return 0
+    ;;
+  paused)
+    OH_VM_PHASE=paused OH_VM_DETAIL="paused while idle; it resumes when you open an app"
+    return 0
+    ;;
+  exited | dead)
+    if [[ $code == 0 ]]; then
+      OH_VM_PHASE=stopped OH_VM_DETAIL="start it with: omarchohard desktop up"
+    else
+      line=$("$engine" logs --tail 20 "$OH_VM_NAME" 2>&1 | grep -F 'ERROR' | tail -n1 || true)
+      OH_VM_PHASE=failed OH_VM_DETAIL="the VM stopped with code $code${line:+: $(oh_desktop_log_text "$line")}"
+    fi
+    return 0
+    ;;
+  running | restarting | created) ;;
+  *)
+    OH_VM_PHASE=failed OH_VM_DETAIL="the VM container is $state"
+    return 0
+    ;;
+  esac
+  oh_desktop_rdp_up && OH_RDP_UP=1
+
+  case $OH_OFFICE_PHASE in
+  failed)
+    OH_VM_PHASE=failed OH_VM_DETAIL="Office did not install: ${OH_OFFICE_ERROR:-no reason given}; see C:\OEM\office.log in the VM (http://127.0.0.1:8006)"
+    return 0
+    ;;
+  installing-office)
+    OH_VM_PHASE=installing-office OH_VM_DETAIL="Office is downloading and installing in the VM"
+    return 0
+    ;;
+  ready)
+    if ((OH_RDP_UP)); then
+      OH_VM_PHASE=ready OH_VM_DETAIL="${OH_OFFICE_VERSION:+Office $OH_OFFICE_VERSION}"
+    else
+      OH_VM_PHASE=starting OH_VM_DETAIL="Windows is starting; RDP does not answer yet"
+    fi
+    return 0
+    ;;
+  esac
+
+  # No status file yet: Windows itself is still on its way. dockur's log says
+  # how far: downloading and building the install image, then booting it.
+  logs=$("$engine" logs --tail 300 "$OH_VM_NAME" 2>&1 || true)
+  while IFS= read -r line; do
+    case $line in
+    *ERROR:*) found=failed OH_VM_DETAIL=$(oh_desktop_log_text "$line") ;;
+    *Requesting* | *Downloading* | *Verifying* | *Extracting* | *Building* | *"Creating overlay"* | *"Adding "*)
+      found=downloading-windows OH_VM_DETAIL=$(oh_desktop_log_text "$line")
+      ;;
+    *"Booting "* | *"started successfully"*)
+      found=installing-windows OH_VM_DETAIL="Windows Setup is running in the VM; watch it at http://127.0.0.1:8006"
+      ;;
+    esac
+  done <<<"$logs"
+  # A VM made before 0.2.0 never writes office-status.json; there, launchers
+  # WinApps registered mean Office was found.
+  if [[ $found == installing-windows ]] && ((OH_RDP_UP)) && oh_desktop_launchers >/dev/null; then
+    found=ready OH_VM_DETAIL="Office launchers are registered"
+  fi
+  OH_VM_PHASE=${found:-downloading-windows}
+  [[ -n $found ]] || OH_VM_DETAIL="the VM is starting"
+}
+
+# One dockur log line as plain text: no colors, no leading marker.
+oh_desktop_log_text() {
+  local s=$1
+  s=$(printf '%s' "$s" | sed -E $'s/\x1b\\[[0-9;]*m//g; s/^[^[:alnum:]]+//')
+  printf '%s\n' "${s//[[:cntrl:]]/}"
+}
+
+# Something accepts connections on the RDP port. Docker's own proxy can accept
+# before Windows listens, so this alone never means Windows is ready.
+oh_desktop_rdp_up() {
+  oh_winapps_conf_load || true
+  [[ ${OH_WA[RDP_IP]} =~ ^[0-9A-Za-z.:-]+$ && ${OH_WA[RDP_PORT]} =~ ^[0-9]+$ ]] || return 1
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "${OH_WA[RDP_IP]}" "${OH_WA[RDP_PORT]}" 2>/dev/null
+}
+
+# office-status.json, written in Windows. Read as data: unknown phases are
+# dropped and every field is cut to one line of plain text.
+oh_desktop_office_load() {
+  local -a f=()
+  OH_OFFICE_PHASE='' OH_OFFICE_PRODUCT='' OH_OFFICE_VERSION='' OH_OFFICE_CHANNEL='' OH_OFFICE_ERROR=''
+  [[ -f $OH_OFFICE_STATUS ]] || return 1
+  mapfile -t f < <(jq -r '[.phase, .product, .version, .channel, .error] | .[] | (. // "") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:300]' "$OH_OFFICE_STATUS" 2>/dev/null)
+  ((${#f[@]} == 5)) || return 1
+  case ${f[0]} in installing-office | ready | failed) OH_OFFICE_PHASE=${f[0]} ;; esac
+  OH_OFFICE_PRODUCT=${f[1]} OH_OFFICE_VERSION=${f[2]} OH_OFFICE_CHANNEL=${f[3]} OH_OFFICE_ERROR=${f[4]}
+}
+
+# The WinApps launchers for the Office apps, one path per line. Returns 1 when
+# WinApps is not on PATH or registered none of them.
+oh_desktop_launchers() {
+  local wa found=1
+  oh_have winapps || return 1
+  for wa in "${OH_WINAPPS_APP[@]}"; do
+    [[ -f $OH_APPS_DIR/$wa.desktop ]] && printf '%s\n' "$OH_APPS_DIR/$wa.desktop" && found=0
+  done
+  return "$found"
+}
+
+oh_desktop_status() {
+  local json=0
+  case ${1:-} in
+  --json) json=1 ;;
+  '') ;;
+  *) oh_die "usage: omarchohard desktop status [--json]" ;;
+  esac
+  oh_desktop_phase
+  if ((json)); then
+    printf '{"phase":%s,"detail":%s,"vm":%s,"rdp":%s,"office":{"product":%s,"version":%s,"channel":%s,"error":%s},"open_with":%s}\n' \
+      "$(oh_json_str "$OH_VM_PHASE")" "$(oh_json_str "$OH_VM_DETAIL")" "$(oh_json_str "$OH_VM_STATE")" \
+      "$( ((OH_RDP_UP)) && echo true || echo false)" "$(oh_json_str "$OH_OFFICE_PRODUCT")" \
+      "$(oh_json_str "$OH_OFFICE_VERSION")" "$(oh_json_str "$OH_OFFICE_CHANNEL")" \
+      "$(oh_json_str "$OH_OFFICE_ERROR")" "$(oh_json_str "$(oh_config_get open_with)")"
+    return 0
+  fi
+  printf 'phase: %s%s\n' "$OH_VM_PHASE" "${OH_VM_DETAIL:+ ($OH_VM_DETAIL)}"
+  printf 'vm: %s\n' "$OH_VM_STATE"
+  printf 'rdp: %s\n' "$( ((OH_RDP_UP)) && echo answers || echo 'no answer')"
+  [[ -z $OH_OFFICE_VERSION ]] || printf 'office: %s %s, %s channel\n' "$OH_OFFICE_PRODUCT" "$OH_OFFICE_VERSION" "${OH_OFFICE_CHANNEL:-unknown}"
+  printf 'open_with: %s\n' "$(oh_config_get open_with)"
+}
+
+# Print each change of phase until Office is ready, then add the apps. Stops
+# after 90 minutes; Ctrl-C stops only the watching, never the VM.
+oh_desktop_wait() {
+  local poll=${OMARCHOHARD_DESKTOP_POLL:-10} start=$SECONDS last=''
+  [[ -f $OH_VM_DIR/compose.yaml ]] || oh_die "run omarchohard desktop install first"
+  trap 'oh_say ""; oh_say "Stopped watching. Windows keeps installing in the VM."; oh_say "Pick it up again with: omarchohard desktop wait"; exit 130' INT
+  while :; do
+    oh_desktop_phase
+    if [[ $OH_VM_PHASE != "$last" ]]; then
+      oh_say "$(date +%H:%M)  $OH_VM_PHASE${OH_VM_DETAIL:+: $OH_VM_DETAIL}"
+      last=$OH_VM_PHASE
+    fi
+    case $OH_VM_PHASE in
+    ready) break ;;
+    failed) oh_die "the desktop install stopped: $OH_VM_DETAIL" ;;
+    not-installed | stopped) oh_die "the VM is not running; start it with: omarchohard desktop up, then omarchohard desktop wait" ;;
+    esac
+    ((SECONDS - start < 5400)) ||
+      oh_die "still $OH_VM_PHASE after 90 minutes. The VM keeps going; look at http://127.0.0.1:8006, then run: omarchohard desktop wait"
+    sleep "$poll"
+  done
+  trap - INT
+  oh_ok "Office is ready in the VM"
+  oh_desktop_register
+}
+
+# Add the Office apps to the launcher through WinApps, without questions, and
+# send local Office files to them.
+oh_desktop_register() {
+  [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
+  oh_say "Adding Word, Excel, PowerPoint, Outlook and OneNote to the launcher..."
+  # setup.sh loads ./install/inquirer.sh, so it runs from its own folder.
+  (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user --setupAllOfficiallySupportedApps) ||
+    oh_die "WinApps could not add the apps; try again with: omarchohard desktop apps"
+  oh_desktop_prefer on
 }
 
 # Register the Office apps as Linux launchers through WinApps.
 oh_desktop_apps() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "WinApps now scans the VM and lists the apps it found. Choose the Office apps."
-  oh_run "$OH_WINAPPS_DIR/setup.sh" --user
+  (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user)
   oh_say ""
   oh_say "To open local files in desktop Office instead of the web apps:"
   oh_say "  omarchohard desktop prefer on"
@@ -415,12 +608,14 @@ oh_desktop() {
   case $action in
   check) oh_desktop_check ;;
   install) oh_desktop_install "$@" ;;
+  status) oh_desktop_status "$@" ;;
+  wait) oh_desktop_wait ;;
   up) oh_desktop_compose up -d ;;
   down) oh_desktop_compose stop ;;
   apps) oh_desktop_apps ;;
   activate) oh_desktop_activate "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|up|down|apps|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|activate|prefer|remove" ;;
   esac
 }

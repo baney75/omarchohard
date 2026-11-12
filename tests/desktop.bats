@@ -133,3 +133,125 @@ install_stubs() {
   [ ! -e "$vm/storage" ]
   [ ! -e "$HOME/chattr.log" ]
 }
+
+# A docker that reports the VM state in ~/vm.state and the log in ~/vm.log,
+# and records every other command.
+vm_stub() {
+  # shellcheck disable=SC2016
+  stub docker 'case "$1" in
+info) exit 0 ;;
+inspect) cat "$HOME/vm.state" 2>/dev/null || exit 1 ;;
+logs) cat "$HOME/vm.log" 2>/dev/null; exit 0 ;;
+*) printf "%s\n" "$*" >>"$HOME/docker.log" ;;
+esac'
+  mkdir -p "$XDG_DATA_HOME/omarchohard/vm" "$INBOX"
+  : >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  printf 'running 0\n' >"$HOME/vm.state"
+}
+
+# Something listening where winapps.conf says RDP is, like Windows once it is up.
+rdp_listen() {
+  python3 -c 'import socket,sys
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(8)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+while True: s.accept()[0].close()' "$BATS_TEST_TMPDIR/rdp.port" 3>&- &
+  RDP_PID=$!
+  for _ in $(seq 50); do
+    [ -s "$BATS_TEST_TMPDIR/rdp.port" ] && break
+    sleep 0.1
+  done
+  mkdir -p "$XDG_CONFIG_HOME/winapps"
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\nRDP_IP="127.0.0.1"\nRDP_PORT="%s"\n' "$(cat "$BATS_TEST_TMPDIR/rdp.port")" >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+}
+
+office_status() {
+  printf '{"phase":"%s","product":"O365ProPlusRetail","version":"16.0.19328.20100","channel":"Current","error":"%s"}' "$1" "${2:-}" >"$INBOX/office-status.json"
+}
+
+phase() { "$OH" desktop status --json | jq -r .phase; }
+
+teardown() {
+  [ -z "${RDP_PID:-}" ] || kill "$RDP_PID" 2>/dev/null || true
+}
+
+@test "desktop status reports each install phase" {
+  [ "$(phase)" = not-installed ]
+  vm_stub
+  printf '\e[1;34m❯ \e[1;36mDownloading Windows 11...\e[0m\n' >"$HOME/vm.log"
+  [ "$(phase)" = downloading-windows ]
+  [ "$("$OH" desktop status --json | jq -r .detail)" = "Downloading Windows 11..." ]
+  printf '❯ Booting Windows using QEMU v10.1.2...\n' >>"$HOME/vm.log"
+  [ "$(phase)" = installing-windows ]
+  office_status installing-office
+  [ "$(phase)" = installing-office ]
+  office_status ready
+  [ "$(phase)" = starting ]
+  rdp_listen
+  run "$OH" desktop status --json
+  [ "$(jq -r '.phase, .rdp, .office.version, .office.channel' <<<"$output" | tr '\n' ' ')" = "ready true 16.0.19328.20100 Current " ]
+  run "$OH" desktop status
+  [[ $output == *"office: O365ProPlusRetail 16.0.19328.20100, Current channel"* ]]
+  printf 'paused 0\n' >"$HOME/vm.state"
+  [ "$(phase)" = paused ]
+  printf 'exited 0\n' >"$HOME/vm.state"
+  [ "$(phase)" = stopped ]
+}
+
+@test "desktop status reports a failed install with its reason, as plain text" {
+  vm_stub
+  office_status failed 'setup.exe exited with code 17\u001b[31m'
+  run "$OH" desktop status --json
+  [ "$(jq -r .phase <<<"$output")" = failed ]
+  [[ $(jq -r .detail <<<"$output") == *"setup.exe exited with code 17 [31m"* ]]
+  rm "$INBOX/office-status.json"
+  printf 'exited 1\n' >"$HOME/vm.state"
+  printf '\e[1;31m❯ ERROR: Failed to extract the Windows installation image!\e[0m\n' >"$HOME/vm.log"
+  [ "$("$OH" desktop status --json | jq -r .detail)" = "the VM stopped with code 1: ERROR: Failed to extract the Windows installation image!" ]
+}
+
+@test "desktop install --wait prints phases until Office is ready, then adds the apps without questions" {
+  rdp_listen
+  stub git 'exit 0'
+  # Each look at the log gets further, as the VM would.
+  stub docker "case \"\$1\" in
+info) exit 0 ;;
+inspect) echo 'running 0' ;;
+logs) n=\$(cat \"\$HOME/n\" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n >\"\$HOME/n\"
+  echo 'Downloading Windows 11...'
+  [ \$n -ge 2 ] && echo 'Booting Windows using QEMU...'
+  [ \$n -ge 3 ] && printf '{\"phase\":\"ready\",\"version\":\"16.0.1.2\"}' >\"$INBOX/office-status.json\"
+  exit 0 ;;
+*) printf '%s\n' \"\$*\" >>\"\$HOME/docker.log\" ;;
+esac"
+  wa=$XDG_DATA_HOME/omarchohard/winapps
+  mkdir -p "$wa/.git" "$HOME/.local/bin"
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\necho "$PWD $*" >>"$HOME/setup.log"\nprintf "#!/bin/sh\\n" >"$HOME/.local/bin/winapps"\nchmod +x "$HOME/.local/bin/winapps"\n' >"$wa/setup.sh"
+  chmod +x "$wa/setup.sh"
+  OMARCHOHARD_DESKTOP_POLL=0.1 run "$OH" desktop install --force --wait
+  [ "$status" -eq 0 ]
+  [[ $output == *"downloading-windows"*"installing-windows"*"ready"* ]]
+  [ "$(cat "$HOME/setup.log")" = "$wa --user --setupAllOfficiallySupportedApps" ]
+  [ -f "$XDG_DATA_HOME/omarchohard/vm/oem/office-info.ps1" ]
+  grep -qx 'open_with=desktop' "$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+@test "Ctrl-C in desktop wait leaves the VM installing and says how to resume" {
+  vm_stub
+  printf 'Downloading Windows 11...\n' >"$HOME/vm.log"
+  # Background jobs start with SIGINT ignored; give the CLI a normal one.
+  OMARCHOHARD_DESKTOP_POLL=0.1 python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' "$OH" desktop wait >"$BATS_TEST_TMPDIR/out" 2>&1 3>&- &
+  pid=$!
+  for _ in $(seq 50); do
+    grep -q downloading-windows "$BATS_TEST_TMPDIR/out" && break
+    sleep 0.1
+  done
+  kill -INT "$pid"
+  rc=0
+  wait "$pid" || rc=$?
+  [ "$rc" -eq 130 ]
+  grep -qF 'Pick it up again with: omarchohard desktop wait' "$BATS_TEST_TMPDIR/out"
+  [ ! -e "$HOME/docker.log" ]
+}
