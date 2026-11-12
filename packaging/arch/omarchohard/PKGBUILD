@@ -20,7 +20,7 @@ optdepends=(
   'docker: desktop tier (Windows VM)'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('276003dc34cb7d4a526a53f00ceef2851949578f9cdfa43abacf67691cd74fef')
 
 package() {
   cd "$pkgname-$pkgver"
