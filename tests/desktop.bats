@@ -781,9 +781,10 @@ agent_on() {
   desktop_preferred
   sed -i '/^desktop_agent=off$/d' "$XDG_CONFIG_HOME/omarchohard/config"
   # shellcheck disable=SC2016
-  # A connection whose agent beats once, as agent.ps1 does when it starts.
+  # A connection whose first.cmd claims its request, as its move line does,
+  # and whose agent then beats once, as agent.ps1 does when it starts.
   # shellcheck disable=SC2016
-  stub xfreerdp3 'printf "%s\n" "$@" >"$HOME/rdp.args"; cat >"$HOME/rdp.stdin"; : >"$XDG_STATE_HOME/omarchohard/agent/agent.beat"; sleep 0.5'
+  stub xfreerdp3 'printf "%s\n" "$@" >"$HOME/rdp.args"; cat >"$HOME/rdp.stdin"; a=$XDG_STATE_HOME/omarchohard/agent; for r in "$a"/*.go; do [ -f "$r" ] && mv "$r" "$HOME/claimed"; done; : >"$a/agent.beat"; sleep 0.5'
   # shellcheck disable=SC2016
   stub docker 'case "$1" in inspect) echo running ;; esac; exit 0'
   AGENT=$XDG_STATE_HOME/omarchohard/agent
@@ -873,8 +874,13 @@ esac'
   [ "$(grep -cx /printer "$HOME/rdp.args")" -eq 1 ]
   grep -qxF '/app:program:C:\Windows\System32\conhost.exe,name:omarchohard,cmd:--headless cmd.exe /c \\tsclient\home\.local\state\omarchohard\agent\first.cmd' "$HOME/rdp.args"
   first=$AGENT/first.cmd
-  [ "$(sed -n 3p "$first")" = "$(printf 'start "" excel "%s"\r' '\\tsclient\home\Documents\Budget 100%%.xlsx')" ]
-  [ "$(sed -n 4p "$first")" = "$(printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s" -Warm "word,excel,powerpoint"\r' '\\tsclient\home\.local\share\omarchohard\vm\agent.ps1' '\\tsclient\home\.local\state\omarchohard\agent')" ]
+  [ "$(cat "$HOME/claimed")" = "$(printf 'excel\t%s' '\\tsclient\home\Documents\Budget 100%.xlsx')" ]
+  # first.cmd starts the app only when it claims the request itself.
+  q='\\tsclient\home\.local\state\omarchohard\agent'
+  n=$(sed -n 3p "$first" | sed -E 's/^move "[^"]*\\([0-9]+-[0-9]+[.]go)" .*/\1/')
+  [ "$(sed -n 3p "$first")" = "$(printf 'move "%s\\%s" "%s\\%s.first" >nul 2>&1 && start "" excel "%s"\r' "$q" "$n" "$q" "$n" '\\tsclient\home\Documents\Budget 100%%.xlsx')" ]
+  [ "$(sed -n 4p "$first")" = "$(printf 'del "%s\\%s.first" >nul 2>&1\r' "$q" "$n")" ]
+  [ "$(sed -n 5p "$first")" = "$(printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s" -Warm "word,excel,powerpoint"\r' '\\tsclient\home\.local\share\omarchohard\vm\agent.ps1' '\\tsclient\home\.local\state\omarchohard\agent')" ]
   cmp "$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1" "$XDG_DATA_HOME/omarchohard/vm/agent.ps1"
   [ ! -e "$HOME/winapps.log" ]
   # The holder lets go once FreeRDP ends.
@@ -893,7 +899,8 @@ esac'
   run "$OH" desktop open word
   [ "$status" -eq 0 ]
   [ "$(cat "$HOME/winapps.log")" = word-o365 ]
-  [ "$(sed -n 4p "$AGENT/first.cmd")" = "$(printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"\r' '\\tsclient\home\.local\share\omarchohard\vm\agent.ps1' '\\tsclient\home\.local\state\omarchohard\agent')" ]
+  [ -z "$(ls "$AGENT"/*.go "$AGENT"/*.late 2>/dev/null)" ]
+  [ "$(sed -n 5p "$AGENT/first.cmd")" = "$(printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"\r' '\\tsclient\home\.local\share\omarchohard\vm\agent.ps1' '\\tsclient\home\.local\state\omarchohard\agent')" ]
 }
 
 @test "a stopped VM opens the app through WinApps, which says why" {
@@ -936,8 +943,26 @@ esac'
   : >"$HOME/Documents/fix it.bat"
   run "$OH" desktop run "$HOME/Documents/fix it.bat"
   [ "$status" -eq 0 ]
-  [ "$(sed -n 3p "$AGENT/first.cmd")" = "$(printf 'explorer.exe "%s"\r' '\\tsclient\home\Documents\fix it.bat')" ]
+  [[ $(sed -n 3p "$AGENT/first.cmd") == *"$(printf ' && explorer.exe "%s"\r' '\\tsclient\home\Documents\fix it.bat')" ]]
   for _ in $(seq 50); do
+    flock -n "$AGENT/holder.lock" true && break
+    sleep 0.1
+  done
+}
+
+@test "a request nobody claims after the beat opens through WinApps and leaves nothing queued" {
+  agent_on
+  # An agent that beats but never runs the request: the old way a session
+  # that was only disconnected lost it.
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'cat >/dev/null; : >"$XDG_STATE_HOME/omarchohard/agent/agent.beat"; sleep 7'
+  SECONDS=0
+  run "$OH" desktop open word
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/winapps.log")" = word-o365 ]
+  [ -z "$(ls "$AGENT"/*.go "$AGENT"/*.late 2>/dev/null)" ]
+  [ "$SECONDS" -lt 10 ]
+  for _ in $(seq 100); do
     flock -n "$AGENT/holder.lock" true && break
     sleep 0.1
   done
@@ -1040,7 +1065,7 @@ current_beat() {
 @test "with no agent, desktop slim starts one with no app and the request waiting in the queue" {
   agent_on
   # shellcheck disable=SC2016
-  stub xfreerdp3 'cat >/dev/null; a=$XDG_STATE_HOME/omarchohard/agent; cp "$a"/*.go "$HOME/queued"; : >"$a/agent.beat"; printf "done\n" >"$a/$(cut -f2 "$HOME/queued")"; sleep 0.5'
+  stub xfreerdp3 'cat >/dev/null; a=$XDG_STATE_HOME/omarchohard/agent; mv "$a"/*.go "$HOME/queued"; : >"$a/agent.beat"; printf "done\n" >"$a/$(cut -f2 "$HOME/queued")"; sleep 0.5'
   run "$OH" desktop slim
   [ "$status" -eq 0 ]
   re=$'^slim\tslim-[0-9]+[.]log$'
