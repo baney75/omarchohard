@@ -5,6 +5,8 @@
 # inside the OneDrive folder opens in place through its OneDrive address. A file
 # anywhere else is copied into OneDrive/Omarchohard first (outside_files=copy),
 # or opened in desktop Office when the desktop tier is set up (open_with=desktop).
+# With open_with=desktop, `open --app word` with no file raises or starts
+# desktop Word too; Teams, OneDrive and Microsoft 365 home stay web apps.
 
 oh_open() {
   oh_config_load
@@ -16,7 +18,7 @@ oh_open() {
   fi
   if (($# == 0)); then
     [[ -n $app ]] || oh_die "usage: omarchohard open FILE|URL"
-    oh_launch "$app"
+    oh_desktop_launch "$app" || oh_launch "$app"
     return
   fi
   local target

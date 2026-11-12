@@ -37,6 +37,11 @@ declare -gA OH_WINAPPS_APP=(
   [word]=word-o365 [excel]=excel-o365 [powerpoint]=powerpoint-o365
   [outlook]=outlook-o365 [onenote]=onenote-o365
 )
+# The window class WinApps gives each app (FULL_NAME in its apps/*/info).
+declare -gA OH_WINAPPS_CLASS=(
+  [word]="Microsoft Word" [excel]="Microsoft Excel" [powerpoint]="Microsoft PowerPoint"
+  [outlook]="Microsoft Outlook" [onenote]="Microsoft OneNote"
+)
 
 oh_desktop_engine() {
   if oh_have docker && docker info >/dev/null 2>&1; then
@@ -447,6 +452,16 @@ oh_desktop_apps() {
 
 oh_desktop_ready() {
   oh_have winapps && [[ -f $OH_WINAPPS_CONF && -f $OH_VM_DIR/compose.yaml ]]
+}
+
+# Raise the app's desktop Office window, or start the app. Returns 1 when the
+# app has no desktop version (Teams, OneDrive) or the web apps are preferred,
+# so the caller opens the web app instead.
+oh_desktop_launch() {
+  local app=$1 wa=${OH_WINAPPS_APP[$1]:-}
+  [[ -n $wa && $(oh_config_get open_with) == desktop ]] && oh_desktop_ready || return 1
+  oh_focus_existing "^${OH_WINAPPS_CLASS[$app]}\$" && return 0
+  oh_spawn winapps "$wa"
 }
 
 oh_desktop_open_file() {

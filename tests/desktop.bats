@@ -255,3 +255,49 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$OH" desktop wait >"$BATS_TEST_TMPDIR/out
   grep -qF 'Pick it up again with: omarchohard desktop wait' "$BATS_TEST_TMPDIR/out"
   [ ! -e "$HOME/docker.log" ]
 }
+
+# Desktop Office set up and preferred, WinApps on PATH.
+desktop_preferred() {
+  # shellcheck disable=SC2016
+  stub winapps 'printf "%s\n" "$*" >>"$HOME/winapps.log"'
+  mkdir -p "$XDG_CONFIG_HOME/winapps"
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  : >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  printf 'open_with=desktop\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+@test "with desktop Office preferred, open --app raises the app's window or starts it" {
+  desktop_preferred
+  export OMARCHOHARD_DRY_RUN=1
+  # shellcheck disable=SC2016
+  stub hyprctl 'case "$1" in clients) echo "[{\"class\":\"Microsoft Word 2\",\"address\":\"0x1\"},{\"class\":\"Microsoft Word\",\"address\":\"0x2\"}]" ;; esac'
+  run "$OH" open --app word
+  [ "$status" -eq 0 ]
+  [ "$output" = 'would run: hyprctl dispatch hl.dsp.focus({ window = "address:0x2" })' ]
+  run "$OH" open --app excel
+  [ "$output" = 'would run: winapps excel-o365' ]
+  # Teams has no desktop version here; it stays the web app.
+  run "$OH" open --app teams
+  [[ $output == *"--app=https://teams.cloud.microsoft/"* ]]
+  # A file always opens the file, even with Word already open.
+  cp "$FIXTURES/test.docx" "$HOME/Notes.docx"
+  run "$OH" open --app word "$HOME/Notes.docx"
+  [ "$output" = "would run: winapps word-o365 $HOME/Notes.docx" ]
+}
+
+@test "with desktop Office preferred, the launcher and Files open desktop Office" {
+  oh_install_quiet
+  desktop_preferred
+  # The launcher entry runs open --app word with no file.
+  exec_line=$(sed -n 's/^Exec=//p' "$APPS/omarchohard-word.desktop")
+  [ "${exec_line% %U}" = "$OH open --app word" ]
+  "$OH" open --app word
+  cp "$FIXTURES/test.xlsx" "$HOME/Budget.xlsx"
+  xdg-open "$HOME/Budget.xlsx"
+  for _ in $(seq 50); do
+    [ "$(wc -l <"$HOME/winapps.log" 2>/dev/null)" = 2 ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$HOME/winapps.log")" = "$(printf 'word-o365\nexcel-o365 %s' "$HOME/Budget.xlsx")" ]
+  [ ! -s "$HOME/chromium.log" ]
+}
