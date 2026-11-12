@@ -60,7 +60,7 @@ Teams runs in the browser, so the browser owns the camera and microphone.
 ## Hyprland window classes
 
 Chromium names each app window `chrome-<host>__<path>-<Profile>`: dots stay,
-slashes in the path become underscores, and the profile is `Default` for
+each slash in the path becomes `_`, and the profile is `Default` for
 your everyday profile or `Omarchohard` with `--isolated`.
 
 | App | Class (default profile) |
@@ -116,6 +116,19 @@ with.
   profile: `omarchohard install --isolated`, then `omarchohard login --email
   you@school.edu`.
 - `omarchohard login --email ADDR` pre-fills the address on the sign-in page.
+
+## Desktop Office: "Another user is signed in"
+
+A desktop Office app shows a Windows box saying another user is signed in,
+or `omarchohard desktop apps` stops with "REMOTE DESKTOP PROTOCOL FAILURE".
+Windows is still signed in on its own screen, and a RemoteApp cannot start
+while that session is open. dockur signs the user in automatically after
+setup; VMs installed since 0.2.0 sign out at the end of the first boot and
+turn automatic sign-in off.
+
+For a VM installed earlier, sign out of Windows once at
+<http://127.0.0.1:8006> (Start, your name, Sign out), then run
+`omarchohard desktop apps`.
 
 ## Something else
 

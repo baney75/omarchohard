@@ -265,6 +265,8 @@ oh_install() {
   [[ $mail == 0 ]] && oh_mime_release_types "$(oh_app_desktop_id outlook)" x-scheme-handler/mailto
   oh_setup_entry_write "$bin"
   oh_nautilus_scripts_write "$bin"
+  # The desktop tier's "Open in Windows", kept pointing at this copy.
+  [[ -f $OH_APPS_DIR/$OH_ADDIN_ENTRY ]] && oh_desktop_addin_entry_write
   oh_refresh_desktop_db
   ((prewarm)) && oh_prewarm on
   oh_say ""
@@ -296,7 +298,11 @@ oh_uninstall() {
         kept=$path
         continue
       fi
-      [[ -n $path ]] && rm -f -- "$path"
+      case $path in
+      # A line omarchohard added to a file of yours: only that line goes.
+      hypr-line:*) oh_hypr_line_remove "${path#hypr-line:}" ;;
+      ?*) rm -f -- "$path" ;;
+      esac
     done <"$OH_MANIFEST"
     rm -f "$OH_MANIFEST"
     [[ -z $kept ]] || printf '%s\n' "$kept" >"$OH_MANIFEST"

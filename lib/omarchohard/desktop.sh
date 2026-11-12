@@ -5,6 +5,7 @@
 # Layout:
 #   $OH_DATA_DIR/winapps         pinned WinApps checkout
 #   $OH_DATA_DIR/vm/compose.yaml dockur/windows VM definition
+#   $OH_DATA_DIR/vm/storage      the VM disk (a named volume before 0.2.0)
 #   $OH_DATA_DIR/vm/oem          first-boot scripts copied into C:\OEM
 #   $OH_DATA_DIR/vm-inbox        one-shot requests the VM applies (activation)
 #
@@ -20,6 +21,8 @@ OH_VM_DIR=$OH_DATA_DIR/vm
 OH_WINAPPS_DIR=$OH_DATA_DIR/winapps
 OH_VM_INBOX=$OH_DATA_DIR/vm-inbox
 OH_WINAPPS_CONF=${XDG_CONFIG_HOME:-$HOME/.config}/winapps/winapps.conf
+OH_VM_NAME=WinApps
+OH_OFFICE_STATUS=$OH_VM_INBOX/office-status.json
 
 declare -gA OH_OFFICE_PRODUCT=(
   [m365]=O365ProPlusRetail
@@ -34,6 +37,30 @@ declare -gA OH_WINAPPS_APP=(
   [word]=word-o365 [excel]=excel-o365 [powerpoint]=powerpoint-o365
   [outlook]=outlook-o365 [onenote]=onenote-o365
 )
+# Office update channels: the name omarchohard takes, and Office's own name.
+declare -gA OH_OFFICE_CHANNELS=([current]=Current [monthly]=MonthlyEnterprise ["semi-annual"]=SemiAnnual)
+
+# The window title of each app: "Report.docx - Word", or the app's own name
+# while no document is open. Not the window class: every new FreeRDP
+# RemoteApp connection takes over all windows of the Windows session, so once
+# Excel opens, Word's window has the class "Microsoft Excel" too (seen live,
+# 2026-11-12). The Hyprland rules in omarchohard.lua use the same titles.
+declare -gA OH_WINAPPS_TITLE=(
+  [word]='^(.+ - (Microsoft )?Word|Microsoft Word)$'
+  [excel]='^(.+ - (Microsoft )?Excel|Microsoft Excel)$'
+  [powerpoint]='^(.+ - (Microsoft )?PowerPoint|Microsoft PowerPoint)$'
+  [outlook]='^(.+- (Microsoft )?Outlook|Outlook)$'
+  [onenote]='^(.+ - (Microsoft )?OneNote|OneNote)$'
+)
+# The hidden window each RemoteApp session keeps open.
+OH_RDP_MARKER='RemoteApp Marker Window'
+
+# FreeRDP tries Kerberos before NTLM. With Arch's example /etc/krb5.conf
+# (realm ATHENA.MIT.EDU) that costs about 0.1 s and a screen of errors on
+# every connection, and the local VM has no Kerberos. Each WinApps, setup and
+# FreeRDP process omarchohard starts gets KRB5_CONFIG=$OH_RDP_KRB5 in its own
+# environment; nothing else changes.
+OH_RDP_KRB5=/dev/null
 
 oh_desktop_engine() {
   if oh_have docker && docker info >/dev/null 2>&1; then
@@ -53,6 +80,24 @@ oh_desktop_compose() {
   else
     oh_run docker compose -f "$OH_VM_DIR/compose.yaml" "$@"
   fi
+}
+
+# The WinApps settings omarchohard uses, from winapps.conf. Parsed in bash so
+# the password never reaches argv. Returns 1 when there is no winapps.conf.
+declare -gA OH_WA=()
+oh_winapps_conf_load() {
+  local line key value
+  OH_WA=([RDP_USER]=omarchohard [RDP_PASS]='' [RDP_DOMAIN]='' [RDP_IP]=127.0.0.1 [RDP_PORT]=3389)
+  [[ -f $OH_WINAPPS_CONF ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+    RDP_USER=\"*\" | RDP_PASS=\"*\" | RDP_DOMAIN=\"*\" | RDP_IP=\"*\" | RDP_PORT=\"*\")
+      key=${line%%=*} value=${line#*=\"} value=${value%\"}
+      OH_WA[$key]=$value
+      ;;
+    RDP_PORT=[0-9]*) OH_WA[RDP_PORT]=${line#RDP_PORT=} ;;
+    esac
+  done <"$OH_WINAPPS_CONF"
 }
 
 oh_mem_kib() { awk -v k="$1" '$1 == k":" { print $2 }' /proc/meminfo; }
@@ -102,8 +147,20 @@ oh_compose_str() {
   printf '%s' "$s"
 }
 
+# dockur warns that Windows Setup can fail when /storage is on btrfs,
+# Omarchy's default, as copy-on-write fragments the disk image. chattr +C on
+# the empty folder makes every file created in it later no-COW; it does not
+# change files already there, so it runs only before the disk image exists.
+oh_desktop_storage() {
+  local dir=$OH_VM_DIR/storage
+  mkdir -p "$dir"
+  [[ $(stat -f -c %T "$dir" 2>/dev/null) == btrfs && -z $(ls -A "$dir") ]] || return 0
+  oh_run chattr +C "$dir" 2>/dev/null ||
+    oh_warn "could not turn off copy-on-write on $dir (chattr +C); Windows Setup can fail on btrfs"
+}
+
 oh_desktop_install() {
-  local windows=11e office=m365 ram=4G force=0 user pass engine line tpl
+  local windows=11e office=m365 ram=4G force=0 wait=0 legacy=0 user pass engine tpl
   while (($#)); do
     case $1 in
     --windows)
@@ -119,6 +176,7 @@ oh_desktop_install() {
       shift
       ;;
     --force) force=1 ;;
+    --wait) wait=1 ;;
     *) oh_die "unknown desktop install option: $1" ;;
     esac
     shift
@@ -142,17 +200,11 @@ oh_desktop_install() {
   oh_run git -C "$OH_WINAPPS_DIR" checkout --quiet "$OH_WINAPPS_REF"
 
   # A local-only Windows account for RDP. The VM listens on 127.0.0.1 only.
-  user=omarchohard pass=''
-  if [[ -f $OH_WINAPPS_CONF ]]; then
+  if oh_winapps_conf_load; then
     oh_warn "keeping your existing $OH_WINAPPS_CONF"
-    # The local VM account omarchohard manages. Parsed in bash so the password never reaches argv.
-    while IFS= read -r line || [[ -n $line ]]; do
-      case $line in
-      RDP_PASS=\"*\") pass=${line#RDP_PASS=\"} pass=${pass%\"} ;;
-      RDP_USER=\"*\") user=${line#RDP_USER=\"} user=${user%\"} ;;
-      esac
-    done <"$OH_WINAPPS_CONF"
+    user=${OH_WA[RDP_USER]} pass=${OH_WA[RDP_PASS]}
   else
+    user=omarchohard
     pass=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     mkdir -p "${OH_WINAPPS_CONF%/*}"
     (
@@ -182,17 +234,30 @@ EOF
   cp "$OH_WINAPPS_DIR"/oem/* "$OH_VM_DIR/oem/" 2>/dev/null || true
   [[ -f $OH_VM_DIR/oem/install.bat && ! -f $OH_VM_DIR/oem/winapps-install.bat ]] &&
     mv "$OH_VM_DIR/oem/install.bat" "$OH_VM_DIR/oem/winapps-install.bat"
-  cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_VM_DIR/oem/"
+  cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/office-info.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_VM_DIR/oem/"
   printf '%s\n' "${OH_OFFICE_PRODUCT[$office]}" >"$OH_VM_DIR/oem/office-product.txt"
   [[ $OH_VM_INBOX == "$HOME"/* ]] || oh_die "the VM inbox must be under your home folder (it is shared with the VM)"
   # shellcheck disable=SC1003 # '\\' is one backslash to tr
   printf '%s\n' "${OH_VM_INBOX#"$HOME"/}" | tr '/' '\\' >"$OH_VM_DIR/oem/inbox-path.txt"
+  # A VM made before 0.2.0 keeps its disk in the named volume "data"; new
+  # installs keep it in a folder next to compose.yaml.
+  [[ -f $OH_VM_DIR/compose.yaml ]] && grep -qxF '      - data:/storage' "$OH_VM_DIR/compose.yaml" && legacy=1
   # Built in bash, not sed, so the password is never in a process's arguments.
   tpl=$(<"$OH_SHARE/vm/compose.yaml.in")
   tpl=${tpl//@VERSION@/"$windows"}
   tpl=${tpl//@RAM@/"$ram"}
   tpl=${tpl//@USER@/"$(oh_compose_str "$user")"}
   tpl=${tpl//@PASS@/"$(oh_compose_str "$pass")"}
+  if ((legacy)); then
+    tpl=${tpl//'      - ./storage:/storage'/'      - data:/storage'}
+    tpl=${tpl/$'\nservices:'/$'\nvolumes:\n  data:\nservices:'}
+    oh_dim "keeping the VM disk in its docker volume (made before omarchohard 0.2.0)"
+  else
+    # A new disk: a status file left from an earlier VM would say "failed"
+    # or "ready" before this Windows has even started.
+    [[ -e $OH_VM_DIR/storage/data.img ]] || rm -f -- "$OH_OFFICE_STATUS"
+    oh_desktop_storage
+  fi
   (
     umask 077
     printf '%s\n' "$tpl" >"$OH_VM_DIR/compose.yaml"
@@ -202,16 +267,239 @@ EOF
   oh_config_set desktop_office "$office"
   oh_desktop_compose up -d
   oh_say ""
-  oh_ok "Windows is installing itself in the VM. This takes 20 to 40 minutes."
+  oh_ok "Windows is installing itself in the VM. With Office, this takes about 45 minutes."
   oh_say "Watch it at http://127.0.0.1:8006 . Office installs right after Windows."
-  oh_say "When Word appears in the VM, run: omarchohard desktop apps"
+  if ((wait)); then
+    oh_desktop_wait
+  else
+    oh_say "Follow it, and add the apps when Office is ready, with: omarchohard desktop wait"
+  fi
+}
+
+# Where the install is, from the container's state, its log, the RDP port and
+# office-status.json (written by office.ps1 in the VM). Sets OH_VM_PHASE to one
+# of not-installed downloading-windows installing-windows installing-office
+# starting ready failed stopped paused, with OH_VM_DETAIL saying more.
+oh_desktop_phase() {
+  local engine state code line logs found=''
+  OH_VM_PHASE=not-installed OH_VM_DETAIL='' OH_VM_STATE=missing OH_RDP_UP=0
+  oh_desktop_office_load || true
+  if [[ ! -f $OH_VM_DIR/compose.yaml ]]; then
+    OH_VM_DETAIL="set it up with: omarchohard desktop install --wait"
+    return 0
+  fi
+  if ! engine=$(oh_desktop_engine 2>/dev/null); then
+    OH_VM_PHASE=failed OH_VM_DETAIL="no container engine; install Docker (omarchy install docker) or Podman"
+    return 0
+  fi
+  state=$("$engine" inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$OH_VM_NAME" 2>/dev/null) || state=missing
+  code=${state#* } state=${state%% *}
+  OH_VM_STATE=$state
+  case $state in
+  missing)
+    OH_VM_PHASE=stopped OH_VM_DETAIL="the VM container does not exist (omarchohard desktop up)"
+    return 0
+    ;;
+  paused)
+    OH_VM_PHASE=paused OH_VM_DETAIL="paused while idle; it resumes when you open an app"
+    return 0
+    ;;
+  exited | dead)
+    if [[ $code == 0 ]]; then
+      OH_VM_PHASE=stopped OH_VM_DETAIL="start it with: omarchohard desktop up"
+    else
+      line=$("$engine" logs --tail 20 "$OH_VM_NAME" 2>&1 | grep -F 'ERROR' | tail -n1 || true)
+      OH_VM_PHASE=failed OH_VM_DETAIL="the VM stopped with code $code${line:+: $(oh_desktop_log_text "$line")}"
+    fi
+    return 0
+    ;;
+  running | restarting | created) ;;
+  *)
+    OH_VM_PHASE=failed OH_VM_DETAIL="the VM container is $state"
+    return 0
+    ;;
+  esac
+  oh_desktop_rdp_up && OH_RDP_UP=1
+
+  case $OH_OFFICE_PHASE in
+  failed)
+    OH_VM_PHASE=failed OH_VM_DETAIL="Office did not install: ${OH_OFFICE_ERROR:-no reason given}; see C:\OEM\office.log in the VM (http://127.0.0.1:8006)"
+    return 0
+    ;;
+  installing-office)
+    OH_VM_PHASE=installing-office OH_VM_DETAIL="Office is downloading and installing in the VM"
+    return 0
+    ;;
+  installed)
+    OH_VM_PHASE=installing-office OH_VM_DETAIL="Office is installed; Windows is finishing its first start"
+    return 0
+    ;;
+  ready)
+    if ((OH_RDP_UP)); then
+      OH_VM_PHASE=ready OH_VM_DETAIL="${OH_OFFICE_VERSION:+Office $OH_OFFICE_VERSION}"
+    else
+      OH_VM_PHASE=starting OH_VM_DETAIL="Windows is starting; RDP does not answer yet"
+    fi
+    return 0
+    ;;
+  esac
+
+  # No status file yet: Windows itself is still on its way. dockur's log says
+  # how far: downloading and building the install image, then booting it.
+  logs=$("$engine" logs --tail 300 "$OH_VM_NAME" 2>&1 || true)
+  while IFS= read -r line; do
+    case $line in
+    *ERROR:*) found=failed OH_VM_DETAIL=$(oh_desktop_log_text "$line") ;;
+    *Requesting* | *Downloading* | *Verifying* | *Extracting* | *Building* | *"Creating overlay"* | *"Adding "*)
+      found=downloading-windows OH_VM_DETAIL=$(oh_desktop_log_text "$line")
+      ;;
+    *"Booting "* | *"started successfully"*)
+      found=installing-windows OH_VM_DETAIL="Windows Setup is running in the VM; watch it at http://127.0.0.1:8006"
+      ;;
+    esac
+  done <<<"$logs"
+  # A VM made before 0.2.0 (its disk in the volume "data") never writes
+  # office-status.json, so there RDP answering means Windows is up. A new VM
+  # always writes it, and RDP answers there long before Office is in.
+  if [[ $found == installing-windows ]] && ((OH_RDP_UP)) && grep -qxF '      - data:/storage' "$OH_VM_DIR/compose.yaml"; then
+    found=ready OH_VM_DETAIL="made before omarchohard 0.2.0; it reports no Office status"
+  fi
+  OH_VM_PHASE=${found:-downloading-windows}
+  [[ -n $found ]] || OH_VM_DETAIL="the VM is starting"
+}
+
+# One dockur log line as plain text: no colors, no leading marker.
+oh_desktop_log_text() {
+  local s=$1
+  s=$(printf '%s' "$s" | sed -E $'s/\x1b\\[[0-9;]*m//g; s/^[^[:alnum:]]+//')
+  printf '%s\n' "${s//[[:cntrl:]]/}"
+}
+
+# Windows answers on the RDP port. Docker's own proxy accepts a connection
+# before Windows listens, so this sends an RDP connection request (X.224) and
+# needs the reply's TPKT header, 03 00, which only an RDP server sends.
+oh_desktop_rdp_up() {
+  oh_winapps_conf_load || true
+  [[ ${OH_WA[RDP_IP]} =~ ^[0-9A-Za-z.:-]+$ && ${OH_WA[RDP_PORT]} =~ ^[0-9]+$ ]] || return 1
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2" || exit 1
+    printf "\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00" >&3
+    [[ $(head -c 2 <&3 | od -An -tx1 | tr -d " \n") == 0300 ]]' _ "${OH_WA[RDP_IP]}" "${OH_WA[RDP_PORT]}" 2>/dev/null
+}
+
+# office-status.json, written in Windows. Read as data: unknown phases are
+# dropped and every field is cut to one line of plain text.
+oh_desktop_office_load() {
+  local -a f=()
+  OH_OFFICE_PHASE='' OH_OFFICE_PRODUCT='' OH_OFFICE_VERSION='' OH_OFFICE_CHANNEL='' OH_OFFICE_ERROR=''
+  [[ -f $OH_OFFICE_STATUS ]] || return 1
+  mapfile -t f < <(jq -r '[.phase, .product, .version, .channel, .error] | .[] | (. // "") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:300]' "$OH_OFFICE_STATUS" 2>/dev/null)
+  ((${#f[@]} == 5)) || return 1
+  case ${f[0]} in installing-office | installed | ready | failed) OH_OFFICE_PHASE=${f[0]} ;; esac
+  OH_OFFICE_PRODUCT=${f[1]} OH_OFFICE_VERSION=${f[2]} OH_OFFICE_CHANNEL=${f[3]} OH_OFFICE_ERROR=${f[4]}
+}
+
+# The WinApps launchers for the Office apps, one path per line. Returns 1 when
+# WinApps is not on PATH or registered none of them.
+oh_desktop_launchers() {
+  local wa found=1
+  oh_have winapps || return 1
+  for wa in "${OH_WINAPPS_APP[@]}"; do
+    [[ -f $OH_APPS_DIR/$wa.desktop ]] && printf '%s\n' "$OH_APPS_DIR/$wa.desktop" && found=0
+  done
+  return "$found"
+}
+
+oh_desktop_status() {
+  local json=0
+  case ${1:-} in
+  --json) json=1 ;;
+  '') ;;
+  *) oh_die "usage: omarchohard desktop status [--json]" ;;
+  esac
+  oh_desktop_phase
+  if ((json)); then
+    printf '{"phase":%s,"detail":%s,"vm":%s,"rdp":%s,"office":{"product":%s,"version":%s,"channel":%s,"error":%s},"open_with":%s}\n' \
+      "$(oh_json_str "$OH_VM_PHASE")" "$(oh_json_str "$OH_VM_DETAIL")" "$(oh_json_str "$OH_VM_STATE")" \
+      "$( ((OH_RDP_UP)) && echo true || echo false)" "$(oh_json_str "$OH_OFFICE_PRODUCT")" \
+      "$(oh_json_str "$OH_OFFICE_VERSION")" "$(oh_json_str "$OH_OFFICE_CHANNEL")" \
+      "$(oh_json_str "$OH_OFFICE_ERROR")" "$(oh_json_str "$(oh_config_get open_with)")"
+    return 0
+  fi
+  printf 'phase: %s%s\n' "$OH_VM_PHASE" "${OH_VM_DETAIL:+ ($OH_VM_DETAIL)}"
+  printf 'vm: %s\n' "$OH_VM_STATE"
+  printf 'rdp: %s\n' "$( ((OH_RDP_UP)) && echo answers || echo 'no answer')"
+  [[ -z $OH_OFFICE_VERSION ]] || printf 'office: %s %s, %s channel\n' "$OH_OFFICE_PRODUCT" "$OH_OFFICE_VERSION" "${OH_OFFICE_CHANNEL:-unknown}"
+  printf 'open_with: %s\n' "$(oh_config_get open_with)"
+}
+
+# Print each change of phase until Office is ready, then add the apps. Stops
+# after 90 minutes; Ctrl-C stops only the watching, never the VM.
+oh_desktop_wait() {
+  local poll=${OMARCHOHARD_DESKTOP_POLL:-10} start=$SECONDS last=''
+  [[ -f $OH_VM_DIR/compose.yaml ]] || oh_die "run omarchohard desktop install first"
+  trap 'oh_say ""; oh_say "Stopped watching. Windows keeps installing in the VM."; oh_say "Pick it up again with: omarchohard desktop wait"; exit 130' INT
+  while :; do
+    oh_desktop_phase
+    if [[ $OH_VM_PHASE != "$last" ]]; then
+      oh_say "$(date +%H:%M)  $OH_VM_PHASE${OH_VM_DETAIL:+: $OH_VM_DETAIL}"
+      last=$OH_VM_PHASE
+    fi
+    case $OH_VM_PHASE in
+    ready) break ;;
+    failed) oh_die "the desktop install stopped: $OH_VM_DETAIL" ;;
+    not-installed | stopped) oh_die "the VM is not running; start it with: omarchohard desktop up, then omarchohard desktop wait" ;;
+    esac
+    ((SECONDS - start < 5400)) ||
+      oh_die "still $OH_VM_PHASE after 90 minutes. The VM keeps going; look at http://127.0.0.1:8006, then run: omarchohard desktop wait"
+    sleep "$poll"
+  done
+  trap - INT
+  oh_ok "Office is ready in the VM"
+  oh_desktop_register
+}
+
+# Add the Office apps to the launcher through WinApps, without questions, and
+# send local Office files to them.
+# WinApps' setup.sh, run from its own folder, as it loads
+# ./install/inquirer.sh. It exits 14 when FreeRDP cannot connect, which on a
+# VM installed before 0.2.0 means Windows is still signed in at its console:
+# a RemoteApp then shows "Another user is signed in" instead of the app.
+oh_winapps_setup() {
+  local rc try
+  # The first boot signs Windows out of its console a moment after Office
+  # reports ready, so a first exit 14 gets two more tries.
+  for try in 1 2 3; do
+    rc=0
+    (cd "$OH_WINAPPS_DIR" && KRB5_CONFIG=$OH_RDP_KRB5 oh_run ./setup.sh "$@") || rc=$?
+    ((rc == 14 && try < 3)) || break
+    oh_dim "RDP is not ready yet; trying again..."
+    sleep "${OMARCHOHARD_DESKTOP_POLL:-15}"
+  done
+  ((rc != 14)) ||
+    oh_warn "WinApps could not open an app over RDP. If Windows is signed in on its own screen, sign out of Windows once at http://127.0.0.1:8006 (Start, your name, Sign out), then run: omarchohard desktop apps"
+  return "$rc"
+}
+
+oh_desktop_register() {
+  [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
+  oh_say "Adding Word, Excel, PowerPoint, Outlook and OneNote to the launcher..."
+  oh_winapps_setup --user --setupAllOfficiallySupportedApps ||
+    oh_die "WinApps could not add the apps; try again with: omarchohard desktop apps"
+  oh_desktop_addin_entry_write
+  oh_desktop_hypr_write
+  oh_refresh_desktop_db
+  oh_desktop_prefer on
 }
 
 # Register the Office apps as Linux launchers through WinApps.
 oh_desktop_apps() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "WinApps now scans the VM and lists the apps it found. Choose the Office apps."
-  oh_run "$OH_WINAPPS_DIR/setup.sh" --user
+  oh_winapps_setup --user || oh_die "WinApps did not finish; run omarchohard desktop apps again"
+  oh_desktop_addin_entry_write
+  oh_desktop_hypr_write
+  oh_refresh_desktop_db
   oh_say ""
   oh_say "To open local files in desktop Office instead of the web apps:"
   oh_say "  omarchohard desktop prefer on"
@@ -221,13 +509,189 @@ oh_desktop_ready() {
   oh_have winapps && [[ -f $OH_WINAPPS_CONF && -f $OH_VM_DIR/compose.yaml ]]
 }
 
+# Raise the app's desktop Office window, or start the app. Returns 1 when the
+# app has no desktop version (Teams, OneDrive) or the web apps are preferred,
+# so the caller opens the web app instead.
+oh_desktop_launch() {
+  local app=$1 wa=${OH_WINAPPS_APP[$1]:-}
+  [[ -n $wa && $(oh_config_get open_with) == desktop ]] && oh_desktop_ready || return 1
+  oh_desktop_focus "${OH_WINAPPS_TITLE[$app]}" && return 0
+  KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "$wa"
+}
+
+# Raise the first desktop Office window whose title matches. A web app with
+# the same title is left alone: Chromium app windows have a class with "__"
+# in it (host__path), and FreeRDP's classes never do.
+oh_desktop_focus() {
+  local re=$1 address
+  oh_have hyprctl && oh_have jq || return 1
+  address=$(hyprctl clients -j 2>/dev/null | jq -r --arg re "$re" --arg marker "$OH_RDP_MARKER" \
+    'first(.[] | select(.title != $marker and (.title | test($re)) and (.class | contains("__") | not))) | .address' 2>/dev/null) || return 1
+  oh_focus_address "$address"
+}
+
 oh_desktop_open_file() {
   local app=$1 file=$2 wa
   wa=${OH_WINAPPS_APP[$app]:-}
   [[ -n $wa ]] || oh_die "no desktop app for $app"
   [[ $file == "$HOME"/* || $file == /run/media/* ]] ||
     oh_die "desktop Office can open files under $HOME or /run/media only"
-  oh_spawn winapps "$wa" "$file"
+  KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "$wa" "$file"
+}
+
+# The FreeRDP 3 client, the same order oh_desktop_check accepts.
+oh_desktop_freerdp() {
+  local bin
+  for bin in xfreerdp3 xfreerdp sdl-freerdp3; do
+    oh_have "$bin" && printf '%s\n' "$bin" && return 0
+  done
+  return 1
+}
+
+# Windows cannot reach a paused VM over RDP; WinApps' autopause pauses it
+# when idle and unpauses it on launch, so do the same.
+oh_desktop_resume() {
+  local engine state
+  engine=$(oh_desktop_engine) || oh_die "Docker or Podman is required"
+  state=$("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null || echo missing)
+  case ${state%% *} in
+  running) ;;
+  paused) oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null ;;
+  *) oh_die "the Windows VM is $state; start it with: omarchohard desktop up" ;;
+  esac
+}
+
+# Open any file under ~ or /run/media in Windows with its Windows default
+# handler: an add-in (.xll .xlam .ppam .dotm .vsto) installs into Office, an
+# installer (.exe .msi) runs, a document opens. It is a RemoteApp of
+# explorer.exe with the file's \\tsclient path, as WinApps' own launches use.
+oh_desktop_run() {
+  local file=${1:-} abs win rdp
+  local -a args
+  [[ -n $file && $# -eq 1 ]] || oh_die "usage: omarchohard desktop run FILE"
+  oh_require_line "$file" "the file name" "open it in Windows"
+  [[ -e $file ]] || oh_die "no such file: $file"
+  abs=$(readlink -f -- "$file")
+  oh_require_line "$abs" "the file's full path" "open it in Windows"
+  # shellcheck disable=SC1003 # a Windows path ends in a backslash
+  case $abs in
+  "$HOME"/*) win='\\tsclient\home\'${abs#"$HOME"/} ;;
+  /run/media/*) win='\\tsclient\media\'${abs#/run/media/} ;;
+  *) oh_die "Windows can open files under $HOME or /run/media only" ;;
+  esac
+  # Windows file names cannot hold ", and it would end the cmd: value early.
+  [[ $abs != *\"* ]] || oh_die "Windows cannot open a path with \" in it: $abs"
+  # FreeRDP splits /app: at commas, even inside the quotes.
+  [[ $abs != *,* ]] || oh_die "Windows cannot open a path with a comma in it yet; rename it or move it: $abs"
+  win=${win//\//\\}
+  rdp=$(oh_desktop_freerdp) || oh_die "FreeRDP 3 is missing: omarchy pkg add freerdp"
+  oh_winapps_conf_load || oh_die "run omarchohard desktop install first"
+  oh_desktop_resume
+  args=("/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}" "/u:${OH_WA[RDP_USER]}")
+  [[ -z ${OH_WA[RDP_DOMAIN]} ]] || args+=("/d:${OH_WA[RDP_DOMAIN]}")
+  # /from-stdin:force reads the password from stdin before connecting
+  # (FreeRDP 3 client/common/cmdline.c), so it is never in an argument list.
+  # WinApps itself passes /p:, which every process on the machine can read.
+  args+=(/from-stdin:force /cert:tofu +home-drive)
+  [[ -d /run/media ]] && args+=("/drive:media,/run/media")
+  args+=("/wm-class:Microsoft Windows" "/app:program:C:\\Windows\\explorer.exe,name:Open in Windows,cmd:\"$win\"")
+  if oh_dry; then
+    oh_run "$rdp" "${args[@]}"
+    return 0
+  fi
+  # printf is a builtin: the password goes into the pipe, never into argv.
+  printf '%s\n' "${OH_WA[RDP_PASS]}" | KRB5_CONFIG=$OH_RDP_KRB5 setsid -f "$rdp" "${args[@]}" >/dev/null 2>&1
+}
+
+# "Open in Windows" in the Files app's Open With list, for Office add-ins.
+# Written only once the desktop tier has its apps; uninstall removes it.
+OH_ADDIN_MIMES='application/vnd.ms-excel.addin.macroEnabled.12;application/vnd.ms-powerpoint.addin.macroEnabled.12;application/vnd.ms-word.template.macroEnabled.12;application/x-ms-excel-xll;application/x-ms-vsto;'
+OH_ADDIN_ENTRY=omarchohard-windows.desktop
+
+oh_desktop_addin_entry_write() {
+  local bin file=$OH_APPS_DIR/$OH_ADDIN_ENTRY pkg
+  pkg=${XDG_DATA_HOME:-$HOME/.local/share}/mime/packages/omarchohard-addins.xml
+  bin=$(oh_bin_path)
+  mkdir -p "$OH_APPS_DIR" "${pkg%/*}"
+  cp "$OH_SHARE/mime/omarchohard-addins.xml" "$pkg"
+  oh_manifest_add "$pkg"
+  {
+    printf '[Desktop Entry]\nVersion=1.0\nType=Application\n'
+    printf 'Name=Open in Windows\n'
+    printf 'Comment=Open the file in Windows with its Windows program: add-ins, installers, documents\n'
+    printf 'Exec=%s desktop run %%f\n' "$(oh_desktop_exec_arg "$bin")"
+    printf 'Icon=omarchohard-m365\nTerminal=false\nNoDisplay=true\nCategories=Office;\n'
+    printf 'MimeType=%s\n' "$OH_ADDIN_MIMES"
+  } >"$file"
+  oh_manifest_add "$file"
+}
+
+oh_desktop_addin_entry_remove() {
+  rm -f -- "$OH_APPS_DIR/$OH_ADDIN_ENTRY" "${XDG_DATA_HOME:-$HOME/.local/share}/mime/packages/omarchohard-addins.xml"
+}
+
+# Hyprland window rules for desktop Office, in a file of their own that one
+# guarded line in hyprland.lua loads. Only Omarchy's Lua config is edited,
+# and only by adding that line; uninstall removes exactly that line.
+OH_HYPR_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/hypr
+OH_HYPR_RULES=$OH_HYPR_DIR/omarchohard.lua
+
+# The line that loads the rules. pcall keeps Hyprland's config loading when
+# the file is gone.
+oh_hypr_line() {
+  if [[ $OH_HYPR_RULES == "$HOME/.config/hypr/omarchohard.lua" ]]; then
+    printf '%s\n' 'pcall(dofile, os.getenv("HOME") .. "/.config/hypr/omarchohard.lua") -- omarchohard'
+  else
+    printf 'pcall(dofile, "%s") -- omarchohard\n' "$OH_HYPR_RULES"
+  fi
+}
+
+oh_desktop_hypr_write() {
+  local conf=$OH_HYPR_DIR/hyprland.lua line app
+  if [[ ! -f $conf ]]; then
+    [[ ! -f $OH_HYPR_DIR/hyprland.conf ]] ||
+      oh_warn "Hyprland here uses hyprland.conf, not the Lua config; omarchohard added no window rules for desktop Office"
+    return 0
+  fi
+  {
+    printf -- '-- Written by omarchohard for desktop Office; omarchohard uninstall removes it.\n'
+    printf -- '-- Matched by title: FreeRDP gives every window of the Windows session one class.\n\n'
+    printf -- '-- The window each RemoteApp session keeps open: out of sight, never focused.\n'
+    printf 'o.window({ title = "^%s$" }, { workspace = "special:omarchohard silent", no_focus = true })\n\n' "$OH_RDP_MARKER"
+    printf -- '-- Documents opaque, not in the translucent default app style.\n'
+    for app in word excel powerpoint outlook onenote; do
+      printf 'o.window({ title = "%s" }, { tag = "-default-opacity", opacity = "1 1" })\n' "${OH_WINAPPS_TITLE[$app]}"
+    done
+  } >"$OH_HYPR_RULES"
+  oh_manifest_add "$OH_HYPR_RULES"
+  line=$(oh_hypr_line)
+  grep -qxF -- "$line" "$conf" && return 0
+  # Appended on a line of its own; nothing else in the file changes.
+  [[ ! -s $conf || -z $(tail -c 1 "$conf") ]] || printf '\n' >>"$conf"
+  printf '%s\n' "$line" >>"$conf"
+  oh_manifest_add "hypr-line:$conf"
+}
+
+# Take our line back out of hyprland.lua. Written through the file, so a
+# symlinked config stays a symlink.
+oh_hypr_line_remove() {
+  local conf=$1 line tmp rc=0
+  line=$(oh_hypr_line)
+  [[ -f $conf ]] && grep -qxF -- "$line" "$conf" || return 0
+  tmp=$(mktemp)
+  grep -vxF -- "$line" "$conf" >"$tmp" || rc=$?
+  if ((rc > 1)); then
+    rm -f "$tmp"
+    oh_warn "could not remove the omarchohard line from $conf"
+    return 0
+  fi
+  cat "$tmp" >"$conf"
+  rm -f "$tmp"
+}
+
+oh_desktop_hypr_remove() {
+  oh_hypr_line_remove "$OH_HYPR_DIR/hyprland.lua"
+  rm -f -- "$OH_HYPR_RULES"
 }
 
 # Read a key without echoing it. Accepts XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
@@ -246,8 +710,10 @@ oh_desktop_read_key() {
   printf '%s' "$key"
 }
 
+# EXTRA, the third argument, is more JSON members built from checked words
+# only (a channel name, a version number).
 oh_desktop_request() {
-  local action=$1 key=${2:-} id req result i
+  local action=$1 key=${2:-} extra=${3:-} id req result i
   id=$(date +%s)-$RANDOM
   req=$OH_VM_INBOX/$id.request
   result=$OH_VM_INBOX/$id.result
@@ -261,7 +727,7 @@ oh_desktop_request() {
   # so the printf builtin writes valid JSON and no process sees the key.
   (
     umask 077
-    printf '{"action":"%s","key":"%s"}\n' "$action" "$key" >"$req.tmp"
+    printf '{"action":"%s","key":"%s"%s}\n' "$action" "$key" "$extra" >"$req.tmp"
     mv "$req.tmp" "$req"
   )
   oh_say "Sent to the VM; waiting for Windows to apply it (up to 3 minutes)..."
@@ -315,6 +781,43 @@ oh_desktop_activate() {
   key=''
 }
 
+# Office updates itself in the VM. This asks for an update now, through the
+# inbox: Office's own updater, to a set version or after moving to another
+# channel when asked, and a Windows Update scan. The answer is JSON with
+# Office's version, channel and a message.
+oh_desktop_update() {
+  local channel='' to='' extra='' office
+  while (($#)); do
+    case $1 in
+    --channel)
+      channel=${2:?--channel needs current, monthly or semi-annual}
+      shift
+      ;;
+    --to)
+      to=${2:?--to needs an Office version like 16.0.19328.20100}
+      shift
+      ;;
+    *) oh_die "unknown desktop update option: $1" ;;
+    esac
+    shift
+  done
+  [[ -z $channel || -n ${OH_OFFICE_CHANNELS[$channel]:-} ]] || oh_die "--channel must be current, monthly or semi-annual"
+  # Monthly and semi-annual channels exist for Microsoft 365 Apps for business
+  # and enterprise only; other editions stay on the channel they came with.
+  oh_config_load
+  office=$(oh_config_get desktop_office)
+  [[ -z $channel || -z $office || $office == m365 ]] ||
+    oh_die "only Microsoft 365 (--office m365) can change channel; this VM has $office"
+  [[ -z $to || $to =~ ^[0-9]+(\.[0-9]+){3}$ ]] || oh_die "--to needs an Office version like 16.0.19328.20100"
+  [[ -f $OH_VM_DIR/compose.yaml ]] || oh_die "run omarchohard desktop install first"
+  [[ -z $to ]] || extra+=",\"version\":\"$to\""
+  if [[ -n $channel ]]; then
+    oh_desktop_request channel '' ",\"channel\":\"${OH_OFFICE_CHANNELS[$channel]}\"$extra"
+  else
+    oh_desktop_request update '' "$extra"
+  fi
+}
+
 oh_desktop_prefer() {
   case ${1:-} in
   on)
@@ -342,31 +845,91 @@ oh_desktop_remove() {
     read -r -p "This deletes the Windows VM disk and everything in it. Type DELETE to confirm: " answer
     [[ $answer == DELETE ]] || oh_die "not deleted"
     oh_desktop_compose down -v
+    # A reinstall starts from nothing: no old "failed" or "ready" status, and
+    # no compose.yaml, which setup reads as "desktop Office is installed".
+    rm -f -- "$OH_OFFICE_STATUS" "$OH_VM_DIR/compose.yaml"
+    # The disk folder of an install made since 0.2.0. Windows' files in it
+    # belong to the container's root user, but the folder is yours.
+    oh_run rm -rf -- "$OH_VM_DIR/storage" 2>/dev/null ||
+      oh_warn "some VM files were not deleted; remove them with: sudo rm -rf $OH_VM_DIR/storage"
   else
     oh_desktop_compose down
   fi
   oh_config_set open_with web
+  oh_desktop_addin_entry_remove
+  oh_desktop_hypr_remove
+  oh_refresh_desktop_db
   if ((delete_vm)); then oh_ok "desktop tier removed and the VM disk deleted"; else oh_ok "desktop tier stopped; the VM disk is kept"; fi
   oh_dim "WinApps launchers can be removed with: $OH_WINAPPS_DIR/setup.sh --user --uninstall"
 }
 
+# Desktop tier checks, once it is installed. A VM paused while idle is
+# fine: WinApps wakes it when an app opens.
 oh_desktop_doctor() {
   [[ -f $OH_VM_DIR/compose.yaml ]] || return 0
-  if ! oh_have winapps; then
-    oh_doc warn "desktop Office" "VM defined but WinApps launchers are not installed (omarchohard desktop apps)"
-    return 0
-  fi
-  local engine state
-  engine=$(oh_desktop_engine 2>/dev/null) || {
-    oh_doc fail "desktop Office" "no container engine"
-    return 0
-  }
-  state=$("$engine" inspect -f '{{.State.Status}}' WinApps 2>/dev/null || echo missing)
-  case $state in
-  running) oh_doc ok "desktop Office" "VM running" ;;
-  exited | paused) oh_doc warn "desktop Office" "VM is $state (omarchohard desktop up)" ;;
-  *) oh_doc fail "desktop Office" "VM container is $state" ;;
+  local app wa have=() missing=() names
+  oh_desktop_phase
+  case $OH_VM_STATE in
+  running | restarting | created) oh_doc ok "desktop VM" "$OH_VM_STATE" ;;
+  paused) oh_doc ok "desktop VM" "paused while idle; it resumes when you open an app" ;;
+  *)
+    if [[ $OH_VM_PHASE == failed ]]; then oh_doc fail "desktop VM" "$OH_VM_DETAIL"; else
+      oh_doc warn "desktop VM" "${OH_VM_PHASE}: $OH_VM_DETAIL"
+    fi
+    ;;
   esac
+  case $OH_VM_PHASE in
+  downloading-windows | installing-windows | installing-office | starting)
+    oh_doc warn "desktop install" "$OH_VM_PHASE${OH_VM_DETAIL:+: $OH_VM_DETAIL} (follow it: omarchohard desktop wait)"
+    ;;
+  # A failed Office install is the "desktop Office" check below.
+  failed) [[ $OH_VM_STATE != running || $OH_OFFICE_PHASE == failed ]] || oh_doc fail "desktop install" "$OH_VM_DETAIL" ;;
+  esac
+  if [[ $OH_VM_STATE == running ]]; then
+    if ((OH_RDP_UP)); then
+      oh_doc ok "desktop RDP" "${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} answers"
+    elif [[ $OH_VM_PHASE == downloading-windows || $OH_VM_PHASE == installing-windows || $OH_VM_PHASE == installing-office || $OH_VM_PHASE == starting ]]; then
+      oh_doc warn "desktop RDP" "no answer on ${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} yet; Windows is still installing or starting"
+    else
+      oh_doc fail "desktop RDP" "no answer on ${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} (restart the VM: omarchohard desktop down, then up)"
+    fi
+  fi
+  if [[ $OH_OFFICE_PHASE == failed ]]; then
+    oh_doc fail "desktop Office" "did not install: ${OH_OFFICE_ERROR:-no reason given}"
+  elif [[ -n $OH_OFFICE_VERSION ]]; then
+    oh_doc ok "desktop Office" "${OH_OFFICE_PRODUCT:+$OH_OFFICE_PRODUCT }$OH_OFFICE_VERSION, ${OH_OFFICE_CHANNEL:-unknown} channel"
+  else
+    oh_doc warn "desktop Office" "no version reported yet; the VM writes it once Office is installed"
+  fi
+  for app in word excel powerpoint outlook onenote; do
+    wa=${OH_WINAPPS_APP[$app]}
+    if [[ -f $OH_APPS_DIR/$wa.desktop ]]; then have+=("$(oh_app_name "$app")"); else missing+=("$(oh_app_name "$app")"); fi
+  done
+  if ! oh_have winapps; then
+    oh_doc warn "desktop launchers" "WinApps is not on PATH (add ~/.local/bin to PATH, or run: omarchohard desktop apps)"
+  elif ((${#missing[@]} == 0)); then
+    names=$(printf '%s, ' "${have[@]}")
+    oh_doc ok "desktop launchers" "${names%, }"
+  else
+    names=$(printf '%s, ' "${missing[@]}")
+    oh_doc warn "desktop launchers" "missing ${names%, } (omarchohard desktop apps)"
+  fi
+  if [[ -f $OH_HYPR_DIR/hyprland.lua ]]; then
+    if [[ -f $OH_HYPR_RULES ]] && grep -qxF -- "$(oh_hypr_line)" "$OH_HYPR_DIR/hyprland.lua"; then
+      oh_doc ok "hyprland rules" "$OH_HYPR_RULES"
+    else
+      oh_doc warn "hyprland rules" "not loaded, so Office windows are translucent and the RemoteApp marker shows (omarchohard desktop apps adds them)"
+    fi
+  elif [[ -f $OH_HYPR_DIR/hyprland.conf ]]; then
+    oh_doc warn "hyprland rules" "Hyprland uses hyprland.conf, not the Lua config; no window rules for desktop Office"
+  fi
+  if [[ $(oh_config_get open_with) != desktop ]]; then
+    oh_doc ok "open_with" "web; to open local files in desktop Office: omarchohard desktop prefer on"
+  elif oh_desktop_ready; then
+    oh_doc ok "open_with" "desktop"
+  else
+    oh_doc warn "open_with" "desktop, but WinApps is missing, so files open in the web apps"
+  fi
 }
 
 oh_desktop() {
@@ -376,12 +939,16 @@ oh_desktop() {
   case $action in
   check) oh_desktop_check ;;
   install) oh_desktop_install "$@" ;;
+  status) oh_desktop_status "$@" ;;
+  wait) oh_desktop_wait ;;
   up) oh_desktop_compose up -d ;;
   down) oh_desktop_compose stop ;;
   apps) oh_desktop_apps ;;
   activate) oh_desktop_activate "$@" ;;
+  run) oh_desktop_run "$@" ;;
+  update) oh_desktop_update "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|up|down|apps|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|run|update|activate|prefer|remove" ;;
   esac
 }

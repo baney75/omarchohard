@@ -97,6 +97,15 @@ oh_probe_recommend() {
       printf '%s' "${missing[*]}" | sed 's/,/, /g'
     )"
   fi
+  # The tier setup --tier takes. Desktop Office is the real Windows apps;
+  # the web apps are the light choice and the one for Teams either way.
+  if [[ $R_DESKTOP == yes ]]; then
+    R_TIER=desktop
+    R_WHY_TIER="the real Windows apps: add-ins, macros, offline, Office's own updates (one-time install of about 45 minutes)"
+  else
+    R_TIER=web
+    R_WHY_TIER="desktop Office needs what this machine lacks ($R_WHY_DESKTOP)"
+  fi
 }
 
 oh_probe() {
@@ -114,15 +123,16 @@ oh_probe() {
     printf 'recommend onedrive=%s    # %s\n' "$R_ONEDRIVE" "$R_WHY_ONEDRIVE"
     printf 'recommend cache=%s       # %s\n' "$R_CACHE" "$R_WHY_CACHE"
     printf 'desktop office: %s       # %s\n' "$R_DESKTOP" "$R_WHY_DESKTOP"
+    printf 'recommend tier=%s        # %s\n' "$R_TIER" "$R_WHY_TIER"
     return 0
   fi
   printf '{"version":%s,"channel":%s,' "$(oh_json_str "$(oh_version)")" "$(oh_json_str "$(oh_config_get channel)")"
-  printf '"installed":%s,' "$(oh_json_bool test -f "$OH_STATE_DIR/manifest")"
-  printf '"config":{"apps":%s,"browser":%s,"profile":%s,"onedrive_client":%s,"onedrive_cache_size":%s,"mail":%s,"email_set":%s,"onedrive_web_root_set":%s},' \
+  printf '"installed":%s,"desktop_installed":%s,' "$(oh_json_bool test -f "$OH_STATE_DIR/manifest")" "$(oh_json_bool test -f "$OH_VM_DIR/compose.yaml")"
+  printf '"config":{"apps":%s,"browser":%s,"profile":%s,"onedrive_client":%s,"onedrive_cache_size":%s,"mail":%s,"email_set":%s,"onedrive_web_root_set":%s,"open_with":%s},' \
     "$(oh_json_str "$(oh_config_get apps)")" "$(oh_json_str "$(oh_config_get browser)")" "$(oh_json_str "$(oh_config_get profile)")" \
     "$(oh_json_str "$(oh_config_get onedrive_client)")" "$(oh_json_str "$(oh_config_get onedrive_cache_size)")" \
     "$(oh_json_str "$(oh_config_get mail)")" "$(oh_json_bool test -n "$(oh_config_get email)")" \
-    "$(oh_json_bool test -n "$(oh_config_get onedrive_web_root)")"
+    "$(oh_json_bool test -n "$(oh_config_get onedrive_web_root)")" "$(oh_json_str "$(oh_config_get open_with)")"
   printf '"device":{"threads":%s,"mem_total_mib":%s,"mem_available_mib":%s,"disk_free_gib":%s,"on_battery":%s,"hyprland":%s,"omarchy":%s,' \
     "$P_THREADS" "$P_MEM_TOTAL" "$P_MEM_AVAIL" "$P_DISK_FREE" "$( ((P_BATTERY)) && echo true || echo false)" \
     "$(oh_json_str "$P_HYPR")" "$(oh_json_str "$P_OMARCHY")"
@@ -142,7 +152,8 @@ oh_probe() {
   printf '"prewarm":{"value":%s,"why":%s},' "$(oh_json_str "$R_PREWARM")" "$(oh_json_str "$R_WHY_PREWARM")"
   printf '"onedrive_client":{"value":%s,"why":%s},' "$(oh_json_str "$R_ONEDRIVE")" "$(oh_json_str "$R_WHY_ONEDRIVE")"
   printf '"onedrive_cache_size":{"value":%s,"why":%s},' "$(oh_json_str "$R_CACHE")" "$(oh_json_str "$R_WHY_CACHE")"
-  printf '"desktop_office":{"value":%s,"why":%s}' "$(oh_json_str "$R_DESKTOP")" "$(oh_json_str "$R_WHY_DESKTOP")"
+  printf '"desktop_office":{"value":%s,"why":%s},' "$(oh_json_str "$R_DESKTOP")" "$(oh_json_str "$R_WHY_DESKTOP")"
+  printf '"tier":{"value":%s,"why":%s}' "$(oh_json_str "$R_TIER")" "$(oh_json_str "$R_WHY_TIER")"
   printf '},"needs_person":["Microsoft sign-in (omarchohard login)","OneDrive sign-in (omarchohard onedrive setup)"]}\n'
 }
 
@@ -175,6 +186,8 @@ oh_optimize() {
   # The profile choice changes where the user is signed in, so optimize only
   # reports it; setup or `install --isolated` changes it on purpose.
   [[ $(oh_config_get profile) == "$R_PROFILE" ]] || oh_say "suggest profile=$R_PROFILE ($R_WHY_PROFILE); change it with omarchohard setup"
+  # A 45-minute install that needs a person to sign in to Office: suggested only.
+  [[ $R_TIER == desktop && ! -f $OH_VM_DIR/compose.yaml ]] && oh_say "suggest tier=desktop ($R_WHY_TIER); set it up with: omarchohard setup --tier desktop"
 
   if [[ $(oh_config_get profile) == isolated ]]; then
     local want=$R_PREWARM have

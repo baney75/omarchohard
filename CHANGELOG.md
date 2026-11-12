@@ -8,6 +8,70 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+### Added
+
+- Setup asks which Office you want: desktop Office (the real Windows apps in
+  a Windows VM) or the web apps, and recommends desktop Office only when
+  `desktop check` passes. `setup --tier desktop|web` for scripts; `--yes`
+  without `--tier` stays `web`. Desktop runs `desktop install --wait` and
+  still sets up the web apps, for Teams. `probe` reports `recommend.tier`,
+  `desktop_installed` and `config.open_with`.
+- `omarchohard desktop status [--json]` reports the install phase, from
+  downloading Windows to ready, and `desktop install --wait` and
+  `desktop wait` follow it for up to 90 minutes, then add the Office apps to
+  the launcher and turn `prefer on`. Ctrl-C stops the watching, not the VM.
+  The Office install in Windows writes `office-status.json` to the inbox.
+- `omarchohard open --app word` (and the other Office apps) raises an open
+  desktop Office window or starts it, when the desktop tier is preferred.
+- `omarchohard desktop run FILE` opens a file in Windows, such as an Office
+  add-in, with FreeRDP reading the password from standard input. An Open in
+  Windows entry handles `.xll`, `.xlam`, `.ppam`, `.dotm` and `.vsto` files.
+- `omarchohard desktop update [--channel current|monthly|semi-annual]
+  [--to VERSION]` updates Office now and starts a Windows Update scan, and
+  `omarchohard update` points to it.
+- `omarchohard doctor` checks the VM, the install phase, RDP, the Office
+  version and channel, the WinApps launchers and `open_with`.
+- Hyprland window rules for desktop Office in `~/.config/hypr/omarchohard.lua`,
+  loaded by one guarded line in `hyprland.lua` that uninstall removes:
+  documents are opaque and the RemoteApp marker window is hidden. Doctor
+  warns when Hyprland uses `hyprland.conf`.
+
+### Changed
+
+- New desktop VMs keep their disk in `~/.local/share/omarchohard/vm/storage`
+  with copy-on-write off on btrfs, instead of a Docker volume. Existing VMs
+  keep their volume. `desktop remove --delete-vm` deletes the folder.
+- The dockur/windows image is pinned to `6.06` instead of `latest`.
+- Office in the VM installs with updates on, on the chosen channel, and the
+  install fails loudly when Office's installer does.
+- The first boot of the VM signs out of the Windows console after Office
+  installs and turns automatic sign-in off, so RemoteApp no longer shows
+  "Another user is signed in". When WinApps cannot connect, `desktop wait`
+  and `desktop apps` say to sign out once.
+- WinApps' TimeSync task and the inbox task run through
+  `conhost.exe --headless`, with no window at sign-in.
+- Launch-or-focus finds desktop Office windows by title, as FreeRDP gives
+  all windows of the session the class of its newest connection.
+- WinApps, its setup and FreeRDP run with `KRB5_CONFIG=/dev/null`, skipping a
+  failing Kerberos attempt on each connection.
+- The README leads with desktop Office and keeps the web apps as the light
+  option.
+
+### Fixed
+
+- `desktop update` and `desktop activate` reach Windows. Windows kept a cached
+  listing of the shared inbox folder and never saw a request written from
+  Linux; the first boot now turns the SMB client cache off.
+- `desktop status` counts RDP as up only when Windows answers an RDP
+  connection request, not when Docker's port proxy accepts a connection.
+- Launch-or-focus and the Hyprland rules match windows titled with the full
+  app name, such as `Budget.xlsx - Microsoft Excel`, as RemoteApp shows them.
+- `desktop activate --status` reports Microsoft 365 by its version and
+  channel instead of "not installed".
+- Setup's "Open Word now?" opens desktop Word when desktop Office is chosen.
+- The first boot removes the plain-text password automatic sign-in left in
+  the registry, and turns hibernation off, which saves several GB of disk.
+
 ## [0.1.1] - 2026-11-11
 
 ### Fixed

@@ -84,8 +84,8 @@ onedrive_rclone() {
 @test "setup reads plain answers when gum is missing" {
   export OMARCHOHARD_NO_GUM=1
   answers=$BATS_TEST_TMPDIR/answers
-  # browser 1, own profile, no email, apps 3 and 6 (PowerPoint, Teams), mailto yes, no sign-in, OneDrive not now, no prewarm, no Word
-  printf '1\n2\n\n3 6\ny\nn\n3\nn\nn\n' >"$answers"
+  # web apps, browser 1, own profile, no email, apps 3 and 6 (PowerPoint, Teams), mailto yes, no sign-in, OneDrive not now, no prewarm, no Word
+  printf '1\n1\n2\n\n3 6\ny\nn\n3\nn\nn\n' >"$answers"
   OMARCHOHARD_TTY=$answers run "$OH" setup
   [ "$status" -eq 0 ]
   [ -f "$APPS/omarchohard-powerpoint.desktop" ]
@@ -323,4 +323,48 @@ signer_ok() {
   run "$OH" setup --yes --browser chromium --isolated --onedrive none --prewarm off
   [ "$status" -eq 0 ]
   [[ $output == *"Checking everything"* ]]
+}
+
+@test "setup --yes without --tier keeps the web apps and never touches a VM" {
+  # shellcheck disable=SC2016
+  stub docker 'printf "%s\n" "$*" >>"$HOME/docker.log"'
+  run "$OH" setup --yes --browser chromium --onedrive none --prewarm off
+  [ "$status" -eq 0 ]
+  [[ $output == *"Office: the web apps"* ]]
+  [ ! -e "$HOME/docker.log" ]
+  [ ! -e "$XDG_DATA_HOME/omarchohard/vm" ]
+}
+
+@test "setup --tier desktop runs the desktop install last and still sets up the web apps" {
+  run "$OH" setup --yes --tier desktop --browser chromium --onedrive none --prewarm off
+  # This test machine has no KVM or FreeRDP, so the desktop install stops.
+  [ "$status" -eq 1 ]
+  [[ $output == *"Office: desktop Office"*"6 of 6  OneDrive"*"Checking this machine for the desktop tier"*"this machine is not ready for a Windows VM"*"desktop Office did not finish; the web apps work meanwhile"* ]]
+  [ -f "$APPS/omarchohard-teams.desktop" ]
+  [ -f "$APPS/omarchohard-word.desktop" ]
+  run "$OH" setup --yes --tier windows
+  [ "$status" -eq 1 ]
+  [[ $output == *"--tier takes desktop or web"* ]]
+}
+
+@test "interactive setup explains both tiers and recommends the web apps with the reason" {
+  answers=$BATS_TEST_TMPDIR/answers
+  printf '1\n1\n2\n\n\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 0 ]
+  [[ $output == *"Desktop Office is not recommended here: "*"FreeRDP 3 is missing"* ]]
+  [[ $output == *"1) Web apps: open instantly and stay light (recommended)"* ]]
+  [[ $output == *"2) Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"* ]]
+  # Choosing desktop anyway runs its install at the end.
+  printf '2\n1\n2\n\n\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 1 ]
+  [[ $output == *"Checking this machine for the desktop tier"* ]]
+}
+
+@test "probe --json recommends a tier and reports open_with and the desktop install" {
+  run "$OH" probe --json
+  [ "$status" -eq 0 ]
+  jq -e '.recommend.tier.value == "web" and (.recommend.tier.why | test("FreeRDP 3"))' <<<"$output"
+  jq -e '.config.open_with == "web" and .desktop_installed == false' <<<"$output"
 }

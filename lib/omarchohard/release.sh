@@ -70,7 +70,10 @@ oh_update() {
   if ! oh_self_managed && [[ -z ${OMARCHOHARD_FORCE_SELF_UPDATE:-} ]]; then
     oh_say "omarchohard at $OH_ROOT was installed by a package manager."
     oh_say "Update it there: the AUR package 'omarchohard' follows stable, 'omarchohard-git' follows dev."
-    ((asked)) || return 0
+    ((asked)) || {
+      oh_update_desktop_hint
+      return 0
+    }
     oh_err "the channel was not changed; switch packages to change it"
     return 1
   fi
@@ -85,6 +88,7 @@ oh_update() {
   if [[ $latest == "$(oh_version)" ]]; then
     ((check)) || oh_channel_commit "$channel"
     oh_ok "up to date: $latest ($channel)"
+    ((check)) || oh_update_desktop_hint
     return 0
   fi
   if ((check)); then
@@ -115,6 +119,13 @@ oh_update() {
   if [[ -f $OH_STATE_DIR/manifest ]]; then
     "$OH_CURRENT/bin/omarchohard" install >/dev/null 2>&1 || oh_warn "re-applying launchers failed; run: omarchohard install"
   fi
+  oh_update_desktop_hint
+}
+
+# Desktop Office updates inside Windows, not with omarchohard.
+oh_update_desktop_hint() {
+  [[ -f $OH_VM_DIR/compose.yaml ]] || return 0
+  oh_dim "Desktop Office updates itself in Windows; to update it now: omarchohard desktop update"
 }
 
 oh_channel_commit() {

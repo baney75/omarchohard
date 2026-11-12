@@ -1,29 +1,65 @@
 # omarchohard
 
-Microsoft 365 on [Omarchy](https://omarchy.org) (Arch Linux + Hyprland), set
-up with one command: Word, Excel, PowerPoint, Outlook, OneNote, Teams and
-OneDrive open as their own app windows, show up in the launcher with their
-icons, and open your `.docx`, `.xlsx` and `.pptx` files, `mailto:` links and
-Teams meeting links.
+Real Microsoft Office desktop apps on [Omarchy](https://omarchy.org) (Arch
+Linux + Hyprland). Word, Excel, PowerPoint, Outlook and OneNote are the
+Windows programs themselves, each in its own window next to your Linux apps.
+Add-ins and macros work, Office updates itself, and your `.docx`, `.xlsx`
+and `.pptx` files open from Files.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash
 ```
 
 Run from a terminal, that one line installs the CLI and starts a short guided
-setup. It picks your browser, lets you choose apps, signs you in, sets up
-OneDrive and runs a check.
+setup. Its first question is which Office you want:
+
+- **Desktop Office**: the real Windows apps, with add-ins, macros, offline
+  use and Office's own updates. A one-time install of about 45 minutes; needs
+  KVM, 16 GB of memory and about 80 GB of disk.
+- **Web apps**: Microsoft's web apps as app windows. Ready in about two
+  minutes and light on memory.
+
+Setup recommends desktop Office only when your machine can run it, and says
+why when it cannot. Teams is a web app either way.
+
+## How desktop Office works
+
+Desktop Office runs in a Windows virtual machine you never see.
+[dockur/windows](https://github.com/dockur/windows) installs Windows in a
+container with KVM, and [WinApps](https://github.com/winapps-org/winapps)
+shows each Office app as its own Linux window through FreeRDP RemoteApp.
+omarchohard sets both up, installs Office from Microsoft's servers, adds the
+apps to the launcher and the file handlers, and reports progress until Office
+is ready.
+
+No tool converts a Windows `.exe` into a Linux program; the Windows build has
+to run on Windows. Wine and CrossOver run some Windows programs on Linux
+directly, and CrossOver shipped Office fixes for years
+([CrossOver changelog](https://www.codeweavers.com/crossover/changelog)), but
+Wine-based setups top out at Office 2016 for the core apps, and CrossOver 26
+no longer officially supports Office
+([a comparison of the Linux options](https://gist.github.com/eylenburg/38e5da371b7fedc0662198efc66be57b)).
+A VM costs memory and disk, and in return Office behaves as it does on a
+Windows PC.
+
+Desktop Office is experimental: an end-to-end run is in progress. Word and
+Excel have opened as their own windows on one machine; the full install from
+`omarchohard setup` is untested live. See [Desktop Office](#desktop-office)
+and [docs/desktop-tier.md](docs/desktop-tier.md).
+
+## The web apps
 
 ![omarchohard installs, checks itself and opens Word, Excel, PowerPoint and Teams as tiled Hyprland windows](docs/media/demo.gif)
 
 Recorded in a clean Arch container under Hyprland: the one-line install,
-`omarchohard doctor`, then four apps opening as their own windows.
+`omarchohard doctor`, then four web apps opening as their own windows.
 
-## What it is
-
-- A bash CLI that turns the Microsoft 365 web apps into desktop apps. Each app
-  is a Chromium `--app` window in your default Chromium-family browser
-  profile, so one sign-in covers every app.
+- Each app is a Chromium `--app` window in your default Chromium-family
+  browser profile, so one sign-in covers every app. They need a network
+  connection and a Microsoft account (personal, school or work). Features
+  only desktop Office has (VBA macros, COM and VSTO add-ins, advanced mail
+  merge) are not there; Office Add-ins from the store do work (see
+  [Add-ins](#add-ins-and-extensions)).
 - Desktop entries, icons, file handlers and URL handlers (`mailto`, `msteams`,
   `ms-word`, `ms-excel`, `ms-powerpoint`, `onenote`), registered the
   freedesktop way and fully reversible.
@@ -35,16 +71,12 @@ Recorded in a clean Arch container under Hyprland: the one-line install,
   document to share it by name, or copy a OneDrive link.
 - A guided setup for people (`omarchohard setup`, also in the launcher as
   Microsoft 365 Setup) and flags plus JSON for agents (`probe`, `optimize`).
-- An experimental desktop tier that runs real Microsoft Office in a Windows VM.
 
 ## What it is not
 
-- **Not native Office.** Microsoft ships no native Linux desktop version of
-  Word, Excel, PowerPoint, Outlook or OneNote. omarchohard runs the web apps
-  Microsoft hosts at `*.cloud.microsoft`; they need a network connection and
-  a Microsoft account (personal, school or work). Features that exist only in
-  desktop Office (VBA macros, COM and VSTO add-ins, advanced mail merge) are
-  not there; Office Add-ins from the store do work (see [Add-ins](#add-ins-and-extensions)).
+- **Not a Linux port of Office.** Microsoft ships no Linux desktop Office.
+  Desktop Office here is the Windows build in a Windows VM; the web apps are
+  the ones Microsoft hosts at `*.cloud.microsoft`.
 - **Not a browser and not a sync engine.** It drives the browser you have and
   the OneDrive client you pick.
 - **Not affiliated with Microsoft.** See the trademark notice at the end.
@@ -55,18 +87,21 @@ Recorded in a clean Arch container under Hyprland: the one-line install,
 curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash
 ```
 
-From a terminal, the installer goes straight into `omarchohard setup`, five
+From a terminal, the installer goes straight into `omarchohard setup`, six
 steps that each take one keypress:
 
-1. **Browser.** Your default Chromium-family browser is picked first. If you
+1. **Office.** Desktop Office or the web apps, as above. Desktop Office
+   installs at the end, after the other answers, and the web apps are set up
+   too, for Teams.
+2. **Browser.** Your default Chromium-family browser is picked first. If you
    have none, setup offers to install Chromium.
-2. **Account.** Your Microsoft email, optional; it fills in the sign-in page
+3. **Account.** Your Microsoft email, optional; it fills in the sign-in page
    and the OneDrive address.
-3. **Apps and files.** Pick which apps to install (all are checked; space
+4. **Apps and files.** Pick which apps to install (all are checked; space
    toggles), and whether `mailto:` links open Outlook.
-4. **Sign in.** Opens Microsoft's own sign-in page once. Skip it if you are
+5. **Sign in.** Opens Microsoft's own sign-in page once. Skip it if you are
    already signed in in that browser.
-5. **OneDrive.** Files on demand with rclone (recommended), a full offline
+6. **OneDrive.** Files on demand with rclone (recommended), a full offline
    copy, or not now.
 
 It ends by running `omarchohard doctor`. Run `omarchohard setup` again at any
@@ -82,7 +117,12 @@ nobody has to type a command after the one-line install.
 curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash -s -- --yes
 # or pick the answers:
 omarchohard setup --yes --browser chromium --apps word,excel,powerpoint,teams --onedrive none
+# desktop Office, without questions:
+omarchohard setup --yes --tier desktop
 ```
+
+`--yes` without `--tier` sets up the web apps only, so a script never starts
+the Windows download unasked.
 
 [docs/agents.md](docs/agents.md) covers `probe --json`, `optimize` and what
 still needs a person.
@@ -157,9 +197,9 @@ what happens:
   name gets a numbered copy, such as `Report (1).docx`.
 - **Before OneDrive is set up**: the app opens and a notification says to run
   `omarchohard onedrive setup`.
-- **Desktop tier with `omarchohard desktop prefer on`**: local files open
-  directly in desktop Office in the VM (files under your home folder or
-  `/run/media`), with no copy.
+- **With desktop Office** (`omarchohard desktop prefer on`, which setup turns
+  on): local files open directly in desktop Office (files under your home
+  folder or `/run/media`), with no copy and no OneDrive needed.
 
 In-place opening needs your OneDrive web address, the part up to and
 including `/Documents`, for example
@@ -221,13 +261,18 @@ omarchohard share --link --edit Budget.xlsx # an edit link
 - **Browser extensions** you have in your everyday Chromium profile (password
   managers, Grammarly for Chrome, dark readers) work in every app window with
   the default shared profile. With `--isolated`, install them in that profile.
-- **COM, VSTO and VBA add-ins** are Windows programs and need desktop Office;
-  use the desktop tier for those.
+- **COM, VSTO and VBA add-ins** are Windows programs and need desktop Office.
+  There, `omarchohard desktop run Tool.xll` (or right-click, Open With, Open
+  in Windows) hands an add-in file to Windows, which installs it into Office.
 
 
 ## Sign-in
 
-- Every app uses single sign-on (SSO) in your default browser profile. Sign in
+- **Desktop Office** signs in once, in Office's own window: an unlicensed
+  Microsoft 365 opens "Sign in to get started" with Microsoft's sign-in
+  inside Office. It works like any other window.
+- **The web apps** sign in through your default browser. Every app uses single
+  sign-on (SSO) in your default browser profile. Sign in
   once with `omarchohard login` (or in any app window) and every app is signed
   in. School and work accounts go through their own sign-in page.
 - `omarchohard login --email you@school.edu` fills in the address for you.
@@ -283,35 +328,57 @@ Prewarm (`omarchohard prewarm on`) keeps one windowless browser running in
 the isolated profile. With your default profile it is not needed: when your
 browser is open, launches are already warm.
 
-## Desktop tier (experimental, untested)
+## Desktop Office
 
-For the features only desktop Office has, omarchohard can run real Microsoft
-Office in a Windows VM ([dockur/windows](https://github.com/dockur/windows))
-and show each app as its own Linux window through
-[WinApps](https://github.com/winapps-org/winapps) (FreeRDP RemoteApp). Word,
-Excel, PowerPoint, Outlook and OneNote are available this way; Teams is web
-only.
+Experimental: an end-to-end run is in progress. Word and Excel have opened as
+RemoteApp windows on one machine; the full install from `omarchohard setup`
+is untested live.
 
 ```sh
-omarchohard desktop check        # KVM, Docker or Podman, FreeRDP 3, memory, disk
-omarchohard desktop install      # Windows 11 evaluation + Microsoft 365, 20 to 40 minutes
-omarchohard desktop apps         # add the Office apps to the launcher
-omarchohard desktop prefer on    # open local files in desktop Office
+omarchohard desktop check            # KVM, Docker or Podman, FreeRDP 3, memory, disk
+omarchohard setup --tier desktop     # or: omarchohard desktop install --wait
+omarchohard desktop status           # where the install is; --json for scripts
+omarchohard desktop run Setup.exe    # open any file in Windows: add-ins, installers, documents
+omarchohard desktop update           # update Office and Windows now
 ```
+
+- **Install.** `desktop install --wait` prints each step (downloading Windows,
+  installing Windows, installing Office) until Office is ready, then adds
+  Word, Excel, PowerPoint, Outlook and OneNote to the launcher and sends local
+  Office files to them. Ctrl-C stops only the watching; `omarchohard desktop
+  wait` picks it up again.
+- **Windows.** Each app opens in its own window, and opening it again raises
+  that window, found by its title. On Omarchy's Lua Hyprland config,
+  omarchohard adds a few window rules (`~/.config/hypr/omarchohard.lua`, loaded
+  by one line in `hyprland.lua`): documents stay opaque, and the hidden
+  RemoteApp marker window stays out of sight. Teams stays a web app.
+- **Add-ins and macros** work as on Windows. `desktop run` opens any file
+  under your home folder or `/run/media` with its Windows program, so an
+  `.xll`, `.xlam`, `.ppam`, `.dotm` or `.vsto` add-in installs into Office.
+- **Updates.** Office updates itself in the background. `desktop update`
+  asks for an update now and starts a Windows Update scan;
+  `--channel current|monthly|semi-annual` and `--to VERSION` choose what to
+  update to. `omarchohard doctor` shows the Office version and channel.
+- **Sign-in.** Microsoft 365 activates when you sign in once in Office's own
+  sign-in window ("Sign in to get started with Word"). Until then Office
+  opens in reduced functionality mode: you can view and print,
+  not edit. A bought Office 2021 or 2024 key goes in with
+  `omarchohard desktop activate`, and a Windows key with
+  `omarchohard desktop activate --windows`. Keys are read from a hidden
+  prompt or a key file, never from the command line. The default Windows is
+  the free 90-day evaluation; `--windows 11` uses your own license.
 
 It needs KVM, Docker or Podman, FreeRDP 3, at least 16 GiB of RAM (6 GiB free
 when you start it) and about 80 GB of disk.
 
-**Product keys.** Microsoft 365 activates when you sign in inside Word. A
-bought Office 2021 or 2024 key goes in with `omarchohard desktop activate`,
-and a Windows key with `omarchohard desktop activate --windows`. Keys are read
-from a hidden prompt or a key file, never from the command line, and reach the
-VM through a one-shot request file that is deleted after use; results come
-back with the key masked. The default Windows is the free 90-day evaluation;
-`--windows 11` uses your own license.
+Measured on one machine (2026-11-12: dockur 6.06, Windows 11 Enterprise
+evaluation, Microsoft 365 Apps, FreeRDP 3.33.1, Hyprland 0.57): a Word window
+appeared 1.8 s after launch on the first connection and 1.2 to 1.3 s after
+that; Excel took 1.2 s. The VM used 23.4 GB of disk and 3.5 GiB of memory.
 
-This tier has not been run end to end yet. Full details, requirements and key
-handling: [docs/desktop-tier.md](docs/desktop-tier.md).
+ The Windows VM can read your whole
+home folder; read the warning in [docs/desktop-tier.md](docs/desktop-tier.md)
+first.
 
 ## Uninstall
 
@@ -335,7 +402,7 @@ Firefox and wrong accounts, see [docs/troubleshooting.md](docs/troubleshooting.m
 **Verified** (checks that could fail and passed, in a clean Arch Linux
 container; see `make lint test container`):
 
-- 62 bats tests: install twice is idempotent; doctor passes after install and
+- 127 bats tests: install twice is idempotent; doctor passes after install and
   fails on a removed launcher, a removed icon, a reassigned handler and a
   non-executable Exec path; `xdg-open` sends the `.docx`, `.xlsx` and `.pptx`
   fixtures to Word, Excel and PowerPoint; `mailto`, `msteams` and `ms-word`
@@ -345,7 +412,14 @@ container; see `make lint test container`):
   and setup with typed answers; `install --apps`, `add` and `remove` handing
   file types back; `probe --json` is valid JSON; `optimize` changes nothing
   without `--apply`; share link scope and copy-in; the Files scripts; and
-  `onedrive sync` against a stub rclone socket.
+  `onedrive sync` against a stub rclone socket; and, for desktop Office with
+  stub Docker and FreeRDP: the no-COW storage folder on btrfs, install phases
+  read from the VM log and `office-status.json`, `install --wait` through
+  Ctrl-C, launch-or-focus by window title, `desktop run` path checks with
+  the password on stdin and never on the command line, the update allowlists,
+  the doctor rows, the first-boot script (hidden task windows, the console
+  signed out after Office), the Hyprland rules added and removed by one line,
+  and Kerberos off for the VM connection.
 - The one-line installer over HTTP for stable, nightly and dev, then install,
   doctor, file handler defaults, switching between all three channels, and
   uninstall.
@@ -360,7 +434,10 @@ container; see `make lint test container`):
 account, an in-place edit round trip, a real share link, the setup window from
 the launcher, the Files scripts in Nautilus, Teams calls, screen sharing and
 notifications, launch-or-focus under
-Hyprland, the prewarm service under systemd, and the whole desktop tier. The
+Hyprland, the prewarm service under systemd, and desktop Office end to end
+from `omarchohard setup` (the first-boot script's sign-out and hidden task
+windows, FreeRDP 3 reading the password from stdin, the Hyprland rules in a
+live session, the PowerShell scripts in the VM). The
 launch times above were measured by hand on that laptop.
 
 ## License and trademarks

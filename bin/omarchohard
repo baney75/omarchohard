@@ -20,8 +20,8 @@ omarchohard $(oh_version) - Microsoft 365 on Omarchy
 Usage: omarchohard <command> [options]
 
 Start here
-  setup                  Guided setup: browser, sign-in, OneDrive, check.
-                         Agents: setup --yes [--browser B] [--shared|--isolated]
+  setup                  Guided setup: Office tier, browser, sign-in, OneDrive, check.
+                         Agents: setup --yes [--tier desktop|web] [--browser B] [--shared|--isolated]
                          [--email E] [--no-mail] [--apps LIST] [--onedrive rclone|abraunegg|none]
                          [--prewarm on|off] [--optimize]
 
@@ -49,8 +49,11 @@ Speed and agents
   optimize [--apply]     Tune cache size and prewarm for this device
   prewarm on|off|status  Keep the browser resident so apps open in ~0.2 s
 
-Desktop Office (experimental, needs a Windows VM)
-  desktop check | install | up | down | apps | activate [--key-file F] | remove
+Desktop Office (the real Windows apps, in a Windows VM you never see)
+  desktop check | install [--wait] | status [--json] | wait | up | down | apps
+  desktop run FILE       Open a file in Windows (add-ins, installers, documents)
+  desktop update [--channel current|monthly|semi-annual] [--to VERSION]
+  desktop activate [--key-file F] | prefer on|off | remove [--delete-vm]
 
 Releases
   channel [stable|nightly|dev]   Show or switch the release channel

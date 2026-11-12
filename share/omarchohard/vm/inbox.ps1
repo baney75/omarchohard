@@ -1,10 +1,17 @@
-# Applies one-shot requests that `omarchohard desktop activate` drops into the
-# shared home folder. Each request is deleted before it is acted on, and the
-# result file never contains the key.
+# Applies one-shot requests that `omarchohard desktop activate` and
+# `omarchohard desktop update` drop into the shared home folder. Each request
+# is deleted before it is acted on, and the result file never contains the key.
 $ErrorActionPreference = 'Continue'
-$rel = (Get-Content C:\OEM\inbox-path.txt -Raw).Trim()
-$inbox = "\\host.lan\Data\$rel"
-if (-not (Test-Path $inbox)) { exit 0 }
+. C:\OEM\office-info.ps1
+$inbox = Get-Inbox
+if (-not $inbox) { exit 0 }
+
+# Office's own updater, and the only channels a request may move Office to.
+$c2r = 'C:\Program Files\Common Files\microsoft shared\ClickToRun\OfficeC2RClient.exe'
+$channels = @('Current', 'MonthlyEnterprise', 'SemiAnnual')
+# Four dot-separated numbers, like 16.0.19328.20100. \z, as $ would also
+# accept a trailing newline.
+$versionPattern = '^[0-9]+(\.[0-9]+){3}\z'
 
 $ospp = @(
   "$env:ProgramFiles\Microsoft Office\Office16\OSPP.VBS",
@@ -43,6 +50,24 @@ function Install-ProductKey([string]$key) {
   ($lines | Out-String) -replace [regex]::Escape($key), '*****'
 }
 
+# Ask Office to update now (to $version when given) and Windows Update to
+# scan. Both carry on by themselves; the message says they started.
+function Start-Update([string]$version) {
+  if (-not (Test-Path $c2r)) { return 'Office is not installed yet' }
+  $c2rArgs = @('/update', 'user', 'displaylevel=false', 'forceappshutdown=false')
+  if ($version) { $c2rArgs += "updatetoversion=$version" }
+  Start-Process -FilePath $c2r -ArgumentList $c2rArgs
+  Start-Process -FilePath "$env:SystemRoot\System32\UsoClient.exe" -ArgumentList 'StartInteractiveScan'
+  $to = if ($version) { " to $version" } else { '' }
+  "Office update$to started; Windows Update is checking too"
+}
+
+# The answer to an update request: Office's version and channel, and what happened.
+function Format-UpdateResult([string]$message) {
+  $info = Get-OfficeInfo
+  [ordered]@{ version = $info.version; channel = $info.channel; message = $message } | ConvertTo-Json -Compress
+}
+
 Get-ChildItem -Path $inbox -Filter '*.request' | ForEach-Object {
   $resultPath = $_.FullName -replace '\.request$', '.result'
   try {
@@ -55,18 +80,70 @@ Get-ChildItem -Path $inbox -Filter '*.request' | ForEach-Object {
   else {
     switch ($req.action) {
       'office-key' {
-        if (-not $ospp) { $out = 'Office is not installed yet' ; break }
+        if (-not $ospp) {
+          $out = if ((Get-OfficeInfo).version) { 'This Office takes no key: Microsoft 365 is licensed by signing in to Word with your account' } else { 'Office is not installed yet' }
+          break
+        }
         $out = Install-ProductKey $key
       }
       'windows-key' { $out = Install-ProductKey $key }
       'status' {
         $w = cscript //nologo "$env:SystemRoot\System32\slmgr.vbs" /xpr 2>&1 | Out-String
-        $o = if ($ospp) { cscript //nologo $ospp /dstatus 2>&1 | Out-String } else { 'Office: not installed' }
+        # Microsoft 365 has no OSPP license list; it is licensed by signing in.
+        $i = Get-OfficeInfo
+        $o = if ($ospp) { cscript //nologo $ospp /dstatus 2>&1 | Out-String }
+        elseif ($i.version) { "$($i.product) $($i.version), $($i.channel) channel. Microsoft 365 is licensed by signing in to Office, not by a key." }
+        else { 'Office: not installed' }
         $out = "Windows:`n$w`nOffice:`n$o"
+      }
+      'update' {
+        if ($req.version -and "$($req.version)" -notmatch $versionPattern) { $out = Format-UpdateResult 'rejected: malformed version'; break }
+        $out = Format-UpdateResult (Start-Update "$($req.version)")
+      }
+      'channel' {
+        if ($channels -cnotcontains "$($req.channel)") { $out = Format-UpdateResult 'rejected: unknown channel'; break }
+        if ($req.version -and "$($req.version)" -notmatch $versionPattern) { $out = Format-UpdateResult 'rejected: malformed version'; break }
+        if (-not (Test-Path $c2r)) { $out = Format-UpdateResult 'Office is not installed yet'; break }
+        Start-Process -Wait -FilePath $c2r -ArgumentList '/changesetting', "Channel=$($req.channel)"
+        # Editions other than Microsoft 365 Apps ignore the change; say so.
+        $set = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration' -ErrorAction SilentlyContinue).UpdateChannel
+        $id = ($OfficeChannelIds.GetEnumerator() | Where-Object { $_.Value -eq "$($req.channel)" } | Select-Object -First 1).Key
+        if (-not $id -or "$set" -notlike "*$id*") { $out = Format-UpdateResult "channel not changed: this Office edition stays on its own channel"; break }
+        $out = Format-UpdateResult ("channel set to $($req.channel); " + (Start-Update "$($req.version)"))
       }
       default { $out = "unknown action: $($req.action)" }
     }
   }
   $key = $null
   Set-Content -Path $resultPath -Value $out
+}
+
+# Office updates itself, so keep the version and channel in
+# office-status.json current for `omarchohard doctor` and `desktop status`.
+$statusPath = Join-Path $inbox 'office-status.json'
+if (Test-Path $statusPath) {
+  try { $known = Get-Content $statusPath -Raw | ConvertFrom-Json } catch { $known = $null }
+  $now = Get-OfficeInfo
+  if ($known.phase -eq 'ready' -and ($known.version -ne $now.version -or $known.channel -ne $now.channel)) {
+    Write-OfficeStatus 'ready'
+  }
+  # A first boot cut short (the VM stopped during the Office install) never
+  # runs the end of install.bat again, so finish it here once neither
+  # install.bat nor office.ps1 is running.
+  if ($known.phase -in 'installing-office', 'installed') {
+    $firstBoot = Get-CimInstance Win32_Process -Filter "Name='cmd.exe' OR Name='powershell.exe'" |
+      Where-Object { $_.CommandLine -match 'install\.bat|office\.ps1' }
+    if (-not $firstBoot) {
+      if ($now.version) {
+        $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        powercfg /hibernate off
+        Set-ItemProperty $winlogon AutoAdminLogon '0'
+        Remove-ItemProperty $winlogon DefaultPassword -ErrorAction SilentlyContinue
+        Write-OfficeStatus 'ready'
+        logoff console 2>$null
+      } else {
+        Write-OfficeStatus 'failed' 'the Office install was interrupted; reinstall with: omarchohard desktop remove --delete-vm, then omarchohard desktop install --wait'
+      }
+    }
+  }
 }

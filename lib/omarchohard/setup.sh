@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Guided first-run setup: browser, sign-in, OneDrive and a final check, one
-# question at a time. Uses gum (Omarchy ships it) and falls back to plain
+# Guided first-run setup: which Office, browser, sign-in, OneDrive and a final
+# check, one question at a time. Uses gum (Omarchy ships it) and falls back to plain
 # prompts. Every answer has a safe default, and --yes takes them all.
 
 oh_ui_gum() { oh_have gum && [[ -z ${OMARCHOHARD_NO_GUM:-} ]]; }
@@ -198,9 +198,32 @@ oh_setup_onedrive_failed() {
   fi
 }
 
+# Which Office: the real Windows apps in a VM, or the web apps. Prints
+# desktop, web or installed (the desktop tier is already set up). Desktop is
+# recommended only when this machine passes oh_desktop_check.
+oh_setup_tier() {
+  local check why='' line choice
+  local desk="Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"
+  local web="Web apps: open instantly and stay light"
+  if [[ -f $OH_VM_DIR/compose.yaml ]] && oh_desktop_ready; then
+    echo installed
+    return 0
+  fi
+  if check=$(oh_desktop_check 2>&1); then
+    choice=$(oh_ui_choose "Which Microsoft Office?" "$desk (recommended)" "$web") || return 1
+  else
+    while IFS= read -r line; do
+      [[ $line == *fail* ]] && why+="${why:+; }${line#*fail"$OH_C_OFF"  }"
+    done <<<"$check"
+    oh_say "Desktop Office is not recommended here: $why"
+    choice=$(oh_ui_choose "Which Microsoft Office?" "$web (recommended)" "$desk") || return 1
+  fi
+  if [[ $choice == Desktop* ]]; then echo desktop; else echo web; fi
+}
+
 oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
-  local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer
+  local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer tier='' desktop_failed=0
   local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' optimize=0
   local -a browsers labels
   while (($#)); do
@@ -216,6 +239,7 @@ oh_setup() {
     --onedrive) od=${2:?--onedrive needs rclone, abraunegg or none} && shift ;;
     --prewarm) want_prewarm=${2:?--prewarm needs on or off} && shift ;;
     --optimize) optimize=1 ;;
+    --tier) tier=${2:?--tier needs desktop or web} && shift ;;
     --apps)
       want_apps=$(oh_apps_parse "${2:?--apps needs a list, like word,excel,teams or all}") || exit 1
       shift
@@ -226,6 +250,7 @@ oh_setup() {
   done
   case $od in '' | rclone | abraunegg | none) ;; *) oh_die "--onedrive takes rclone, abraunegg or none" ;; esac
   case $want_prewarm in '' | on | off) ;; *) oh_die "--prewarm takes on or off" ;; esac
+  case $tier in '' | desktop | web) ;; *) oh_die "--tier takes desktop or web" ;; esac
 
   oh_ui_interactive && oh_ui_open
   oh_ui_header "omarchohard setup" "" \
@@ -233,8 +258,25 @@ oh_setup() {
     "as apps on Omarchy. About two minutes; every step can be undone" \
     "with: omarchohard uninstall"
 
-  # 1. Browser. App windows need a Chromium-based browser.
-  oh_ui_step "1 of 5  Browser"
+  # 1. Which Office. Unattended runs without --tier keep the web apps, so a
+  # script or CI never starts a 6 GB Windows download unasked.
+  oh_ui_step "1 of 6  Office"
+  if [[ -z $tier ]]; then
+    if oh_ui_interactive; then
+      tier=$(oh_setup_tier) || oh_die "setup cancelled"
+    else
+      tier=web
+    fi
+  fi
+  [[ $tier == desktop && -f $OH_VM_DIR/compose.yaml ]] && oh_desktop_ready && tier=installed
+  case $tier in
+  installed) oh_ok "Office: desktop Office is already set up (omarchohard desktop status)" ;;
+  desktop) oh_ok "Office: desktop Office, installed at the end; the web apps are set up too, for Teams" ;;
+  web) oh_ok "Office: the web apps" ;;
+  esac
+
+  # 2. Browser. App windows need a Chromium-based browser.
+  oh_ui_step "2 of 6  Browser"
   mapfile -t browsers < <(oh_setup_browsers)
   if ((${#browsers[@]} == 0)); then
     oh_say "The Microsoft apps open as app windows, which needs a Chromium-based browser."
@@ -278,8 +320,8 @@ oh_setup() {
     oh_config_set profile default
   fi
 
-  # 2. Account. Optional; it fills in the sign-in page and the OneDrive address.
-  oh_ui_step "2 of 5  Account"
+  # 3. Account. Optional; it fills in the sign-in page and the OneDrive address.
+  oh_ui_step "3 of 6  Account"
   if [[ -n $want_email ]]; then
     email=$want_email
   else
@@ -294,8 +336,8 @@ oh_setup() {
     fi
   fi
 
-  # 3. Launchers and file handlers.
-  oh_ui_step "3 of 5  Apps and files"
+  # 4. Launchers and file handlers.
+  oh_ui_step "4 of 6  Apps and files"
   if [[ -z $want_apps ]]; then
     local -a names=() picked=()
     local id
@@ -318,8 +360,8 @@ oh_setup() {
   [[ -f $OH_MANIFEST ]] || oh_dry || oh_die "installing the launchers failed; run omarchohard install to see why"
   OH_CFG_LOADED=0 && oh_config_load
 
-  # 4. Sign in, once, on Microsoft's own page.
-  oh_ui_step "4 of 5  Sign in"
+  # 5. Sign in, once, on Microsoft's own page.
+  oh_ui_step "5 of 6  Sign in"
   if [[ ${iso_flag[*]} == --isolated ]]; then
     oh_say "Microsoft 365 has its own profile, so sign in once here."
   else
@@ -330,8 +372,8 @@ oh_setup() {
     oh_ui_interactive && oh_ui_confirm "Finished signing in? (your school or work SSO page counts)" yes >/dev/null || true
   fi
 
-  # 5. OneDrive on disk, so Office files open from Files.
-  oh_ui_step "5 of 5  OneDrive"
+  # 6. OneDrive on disk, so Office files open from Files.
+  oh_ui_step "6 of 6  OneDrive"
   if [[ -n $(oh_config_get onedrive_client) ]]; then
     oh_ok "OneDrive is already set up ($(oh_config_get onedrive_client))"
   else
@@ -370,6 +412,14 @@ oh_setup() {
     oh_optimize --apply
   fi
 
+  # Desktop Office last: it runs for about 45 minutes, and every question
+  # above is answered by then. A subshell, as the install ends with oh_die.
+  if [[ $tier == desktop ]]; then
+    oh_ui_step "Desktop Office (about 45 minutes)"
+    (oh_desktop_install --wait) || desktop_failed=1
+    OH_CFG_LOADED=0 && oh_config_load
+  fi
+
   # Finish: the same check doctor runs.
   oh_ui_step "Checking everything"
   if (oh_doctor) >/dev/null 2>&1; then
@@ -385,11 +435,14 @@ oh_setup() {
     oh_warn "setup finished with problems; the lines marked fail above say what to fix"
   fi
   if oh_ui_interactive && oh_ui_confirm "Open Word now?" no; then
-    oh_launch word
+    oh_desktop_launch word || oh_launch word
+  fi
+  if ((desktop_failed)); then
+    oh_warn "desktop Office did not finish; the web apps work meanwhile. See: omarchohard desktop status"
   fi
   if ((pause)) && oh_ui_interactive; then
     read -r -s -n 1 -p "Press any key to close." <&"$OH_TTY_FD" || true
     printf '\n' >&2
   fi
-  return 0
+  ((desktop_failed == 0))
 }

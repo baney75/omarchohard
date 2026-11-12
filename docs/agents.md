@@ -16,10 +16,11 @@ The report has:
 | Key | What it holds |
 | --- | --- |
 | `version`, `channel`, `installed` | This copy and whether `install` has run |
-| `config` | The current answers: `apps`, `browser`, `profile`, `onedrive_client`, `onedrive_cache_size`, `mail`, and whether an email and OneDrive web address are set (never their values) |
+| `desktop_installed` | Whether a desktop Office VM has been installed |
+| `config` | The current answers: `apps`, `browser`, `profile`, `onedrive_client`, `onedrive_cache_size`, `mail`, `open_with` (`web` or `desktop`), and whether an email and OneDrive web address are set (never their values) |
 | `device` | Threads, memory, free disk, battery, Hyprland and Omarchy versions, KVM, a container engine, FreeRDP, rclone, FUSE, gum |
 | `browsers` | Installed Chromium-family browsers, the default first |
-| `recommend` | `profile`, `prewarm`, `onedrive_client`, `onedrive_cache_size` and `desktop_office`, each with a `value` and a `why` |
+| `recommend` | `tier` (`desktop` only when `desktop check` passes), `profile`, `prewarm`, `onedrive_client`, `onedrive_cache_size` and `desktop_office`, each with a `value` and a `why` |
 | `needs_person` | The steps a person has to do |
 
 Plain `omarchohard probe` prints the same as text.
@@ -35,6 +36,7 @@ omarchohard setup --yes --optimize \
 | Flag | Effect |
 | --- | --- |
 | `--yes`, `-y` | Take the default for every question; never read the terminal |
+| `--tier desktop\|web` | Desktop Office in a Windows VM, or the web apps. `desktop` installs the VM and waits for Office (about 45 minutes) and still sets up the web apps, for Teams; setup exits 1 if Office does not finish. Without `--tier`, `--yes` means `web` |
 | `--browser B` | The browser command, such as `chromium` or `microsoft-edge-stable` |
 | `--shared` or `--isolated` | Share the everyday browser profile (default) or give Microsoft 365 its own |
 | `--apps LIST` | `all`, or a comma list of `word excel powerpoint outlook onenote teams onedrive` |
@@ -66,11 +68,25 @@ and power. It restarts the OneDrive mount only when something changed. It
 never changes the profile, since that moves where the person is signed in; it
 prints a suggestion instead.
 
+`optimize` also prints `suggest tier=desktop` when the device can run desktop
+Office and it is not installed; it never installs it.
+
 ## 4. Check it
 
 ```sh
 omarchohard doctor --json   # {"fails": 0, ...}; exit 1 when a required check fails
+omarchohard desktop status --json
 ```
+
+`desktop status --json` gives `phase` (`not-installed`, `downloading-windows`,
+`installing-windows`, `installing-office`, `starting`, `ready`, `failed`,
+`stopped` or `paused`), `detail`, `vm`, `rdp` (true or false), `office`
+(`product`, `version`, `channel`, `error`) and `open_with`. To wait for a
+desktop install from a script, run `omarchohard desktop wait`: it exits 0
+when Office is ready and 1 on a failure or after 90 minutes. Other desktop
+commands for scripts: `desktop update [--channel current|monthly|semi-annual]
+[--to VERSION]` and `desktop run FILE`. See
+[desktop-tier.md](desktop-tier.md).
 
 ## 5. Hand off
 
