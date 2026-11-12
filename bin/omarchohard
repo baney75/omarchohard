@@ -72,6 +72,9 @@ main() {
   local cmd=${1:-help}
   (($#)) && shift
   case $cmd in
+  open | launch | doctor | login | share) oh_install_refresh ;;
+  esac
+  case $cmd in
   setup) oh_setup "$@" ;;
   probe) oh_probe "$@" ;;
   optimize) oh_optimize "$@" ;;

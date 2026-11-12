@@ -49,6 +49,29 @@ snapshot() {
   [ "$(jq -r .fails <<<"$output")" = 0 ]
 }
 
+@test "the first doctor after a package update claims the types the update added" {
+  oh_install_quiet
+  stamp=$XDG_STATE_HOME/omarchohard/installed
+  [ "$(cat "$stamp")" = "$("$OH" version | cut -d' ' -f2)" ]
+  mime=application/vnd.ms-powerpoint.slideshow.macroEnabled.12
+  # An install by an older version: the type it did not know yet is not ours.
+  for old in 0.0.1 none; do
+    if [ $old = none ]; then rm "$stamp"; else echo $old >"$stamp"; fi
+    xdg-mime default org.example.viewer.desktop $mime
+    run "$OH" doctor
+    [ "$status" -eq 0 ]
+    [ "$(mime_default $mime)" = omarchohard-powerpoint.desktop ]
+    [ "$(cat "$stamp")" = "$("$OH" version | cut -d' ' -f2)" ]
+  done
+}
+
+@test "doctor installs nothing for a user who never ran install" {
+  run "$OH" doctor
+  [ "$status" -eq 1 ]
+  [ ! -e "$APPS/omarchohard-word.desktop" ]
+  [ ! -e "$XDG_STATE_HOME/omarchohard/installed" ]
+}
+
 @test "doctor exits 1 when a desktop entry is removed" {
   oh_install_quiet
   rm "$APPS/omarchohard-excel.desktop"

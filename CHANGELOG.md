@@ -32,6 +32,9 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- After a package update (AUR), the first open, launch or doctor sets the
+  launchers and file types again, so new types such as .ppsm are claimed
+  without running `omarchohard install`.
 - Desktop Office pauses its idle VM reliably. The pause ran inside the
   FreeRDP holder, so a holder that was killed first (a logout, a closed
   terminal) left Windows running, using about 4 GB of memory and 13% of a
