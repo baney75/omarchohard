@@ -14,6 +14,8 @@
 #   run                                     open the file ARG with its Windows program
 #   uri                                     open an ms-word:, ms-excel:,
 #                                           ms-powerpoint: or onenote: link
+#   slim                                    run slim.ps1, hidden; ARG is its
+#                                           log's name in the queue folder
 # Files are \\tsclient\home\... or \\tsclient\media\... paths.
 #
 # -Warm names apps to keep started and hidden once Office is signed in, so
@@ -65,6 +67,12 @@ function Invoke-Request([string]$Line) {
   } elseif ($verb -eq 'uri') {
     if ($arg -notmatch '^(ms-(word|excel|powerpoint)|onenote):') { throw "refused link: $arg" }
     Start-Process -FilePath $arg
+  } elseif ($verb -eq 'slim') {
+    if ($arg -notmatch '^slim-[0-9]+\.log\z') { throw "refused log name: $arg" }
+    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $PSScriptRoot 'slim.ps1') + '"'),
+      '-Log', ('"' + (Join-Path $Queue $arg) + '"'))
+    $p = Start-Process -FilePath powershell.exe -ArgumentList $a -WindowStyle Hidden -PassThru
+    $jobs[$p] = $arg
   } elseif ($exe.ContainsKey($verb)) {
     $program = Join-Path $officeDir ($exe[$verb] + '.EXE')
     if ($arg) { Start-Process -FilePath $program -ArgumentList ('"' + (Assert-HostPath $arg) + '"') }
@@ -109,12 +117,24 @@ function Start-WarmApps {
 }
 
 # Office with a window on screen counts as use, so the agent stays while
-# you work. A hidden warm app does not.
+# you work, and so does a slim still running. A hidden warm app does not.
+$jobs = @{}
 function Test-OfficeInUse {
+  # A slim that ended with an error tells the host, which is waiting for its
+  # log to say done.
+  foreach ($p in @($jobs.Keys)) {
+    if (-not $p.HasExited) { continue }
+    if ($p.ExitCode -ne 0) { Write-AgentLog "error slim`t$($jobs[$p]) : slim ended with exit code $($p.ExitCode) before it finished" }
+    $jobs.Remove($p)
+  }
+  if ($jobs.Count) { return $true }
   [bool](Get-Process -Name $exe.Values -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
 }
 
 $beat = Join-Path $Queue 'agent.beat'
+# The beat names this script's hash, so the host can tell an agent started
+# before an upgrade, which does not know newer requests.
+$self = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLower()
 $last = [DateTime]::UtcNow
 $lastBeat = [DateTime]::MinValue
 $lastWarm = [DateTime]::MinValue
@@ -136,7 +156,7 @@ while (([DateTime]::UtcNow - $last).TotalMinutes -lt $IdleMinutes) {
   }
   $now = [DateTime]::UtcNow
   if (($now - $lastBeat).TotalSeconds -ge 2) {
-    try { [IO.File]::WriteAllText($beat, [string]$PID) } catch {}
+    try { [IO.File]::WriteAllText($beat, "$PID $self") } catch {}
     $lastBeat = $now
     if (Test-OfficeInUse) { $last = $now }
   }

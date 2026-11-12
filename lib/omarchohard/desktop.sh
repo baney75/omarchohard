@@ -235,7 +235,7 @@ EOF
   cp "$OH_WINAPPS_DIR"/oem/* "$OH_VM_DIR/oem/" 2>/dev/null || true
   [[ -f $OH_VM_DIR/oem/install.bat && ! -f $OH_VM_DIR/oem/winapps-install.bat ]] &&
     mv "$OH_VM_DIR/oem/install.bat" "$OH_VM_DIR/oem/winapps-install.bat"
-  cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/office-info.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_VM_DIR/oem/"
+  cp "$OH_SHARE/vm/install.bat" "$OH_SHARE/vm/office.ps1" "$OH_SHARE/vm/office-info.ps1" "$OH_SHARE/vm/inbox.ps1" "$OH_SHARE/vm/slim.ps1" "$OH_VM_DIR/oem/"
   printf '%s\n' "${OH_OFFICE_PRODUCT[$office]}" >"$OH_VM_DIR/oem/office-product.txt"
   [[ $OH_VM_INBOX == "$HOME"/* ]] || oh_die "the VM inbox must be under your home folder (it is shared with the VM)"
   # shellcheck disable=SC1003 # '\\' is one backslash to tr
@@ -680,6 +680,14 @@ oh_agent_usable() {
   done
 }
 
+# True when the running agent is the agent.ps1 this omarchohard ships: its
+# beat names the hash of the script it started from.
+oh_agent_current() {
+  local beat
+  beat=$(cat -- "$OH_AGENT_DIR/agent.beat" 2>/dev/null) || return 1
+  [[ ${beat#* } == "$(sha256sum <"$OH_SHARE/vm/agent.ps1" | cut -d' ' -f1)" ]]
+}
+
 # The agent rewrites agent.beat every 2 seconds while it can reach the folder.
 oh_agent_alive() {
   local mtime
@@ -692,11 +700,7 @@ oh_agent_alive() {
 # back here by the same rename can never also run.
 oh_agent_send() {
   local verb=$1 arg=$2 tenths=$3 f i
-  f=$OH_AGENT_DIR/$(date +%s%N)-$$.go
-  (
-    umask 077
-    printf '%s\t%s\n' "$verb" "$arg" >"$f.tmp"
-  ) && mv -- "$f.tmp" "$f" || return 1
+  f=$(oh_agent_queue "$verb" "$arg") || return 1
   for ((i = 0; i < tenths; i++)); do
     [[ -e $f ]] || return 0
     sleep 0.1
@@ -706,6 +710,16 @@ oh_agent_send() {
   return 1
 }
 
+# Write one request for the agent and print its path.
+oh_agent_queue() {
+  local f
+  f=$OH_AGENT_DIR/$(date +%s%N)-$$.go
+  (
+    umask 077
+    printf '%s\t%s\n' "$1" "$2" >"$f.tmp"
+  ) && mv -- "$f.tmp" "$f" && printf '%s\n' "$f"
+}
+
 # Start the holder with the first request in first.cmd. The app starts at
 # once and the agent after it in the same hidden console, so the first
 # window does not wait for PowerShell (2.0 s against 4.0 s, measured).
@@ -713,7 +727,7 @@ oh_agent_send() {
 # holder holds the lock, 2 when the holder's FreeRDP ended before the agent
 # beat (a refused certificate, a wrong password), so WinApps can show why.
 oh_agent_start() {
-  local verb=$1 arg=$2 lock start q ps warm i
+  local verb=$1 arg=$2 lock start q ps warm i queued=''
   exec {lock}>"$OH_AGENT_DIR/holder.lock"
   if ! flock -n "$lock"; then
     exec {lock}>&-
@@ -728,10 +742,13 @@ oh_agent_start() {
   # start runs a .bat with cmd /K, which leaves its window open; explorer
   # opens a file the way the agent's Start-Process does.
   run) start='explorer.exe' ;;
+  # slim waits in the queue for the agent.
+  slim) start='' ;;
   *) start='start ""' ;;
   esac
   # cmd expands %NAME% even inside quotes; %% is a literal %.
-  [[ -z $arg ]] || start+=" \"${arg//%/%%}\""
+  [[ -z $start || -z $arg ]] || start+=" \"${arg//%/%%}\""
+  [[ -n $start ]] || queued=$(oh_agent_queue "$verb" "$arg") || return 2
   # shellcheck disable=SC1003 # a Windows path ends in a backslash
   q='\\tsclient\home\'${OH_AGENT_DIR#"$HOME"/} ps='\\tsclient\home\'${OH_AGENT_PS1#"$HOME"/}
   mkdir -p "${OH_AGENT_PS1%/*}"
@@ -742,7 +759,8 @@ oh_agent_start() {
   warm=$(oh_config_get desktop_warm | tr -cd 'a-z,')
   [[ -z $warm ]] || warm=" -Warm \"$warm\""
   {
-    printf '@echo off\r\nchcp 65001 >nul\r\n%s\r\n' "$start"
+    printf '@echo off\r\nchcp 65001 >nul\r\n'
+    [[ -z $start ]] || printf '%s\r\n' "$start"
     printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"%s\r\n' \
       "${ps//\//\\}" "${q//\//\\}" "$warm"
   } >"$OH_AGENT_DIR/first.cmd"
@@ -757,6 +775,8 @@ oh_agent_start() {
     if flock -n "$lock"; then
       exec {lock}>&-
       [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+      # Take a queued request back, so the next agent does not run it.
+      [[ -z $queued ]] || { mv -- "$queued" "$queued.late" 2>/dev/null && rm -f -- "$queued.late"; }
       return 2
     fi
     exec {lock}>&-
@@ -786,6 +806,44 @@ oh_agent_go() {
   esac
   # A holder is starting: its agent takes the request once it is up.
   oh_agent_send "$verb" "$arg" 100
+}
+
+# `desktop slim`: shrink the VM's disk with slim.ps1, run by the agent, and
+# print each step as it lands.
+oh_desktop_slim() {
+  local name log line n=0 i gone=0 alog=$OH_AGENT_DIR/agent.log a0
+  (($# == 0)) || oh_die "usage: omarchohard desktop slim"
+  oh_desktop_ready || oh_die "desktop Office is not set up yet (omarchohard desktop install --wait)"
+  # An agent started before an upgrade does not know slim; it stops 15
+  # minutes after the last Office window closes.
+  ! oh_agent_alive || oh_agent_current ||
+    oh_die "the agent in Windows is older than this omarchohard; close the desktop Office windows, wait 15 minutes, and run desktop slim again"
+  name=slim-$(date +%s%N).log log=$OH_AGENT_DIR/$name
+  mkdir -p "${OH_AGENT_PS1%/*}" "$OH_AGENT_DIR"
+  cp -f -- "$OH_SHARE/vm/slim.ps1" "${OH_AGENT_PS1%/*}/slim.ps1"
+  a0=$(wc -l <"$alog" 2>/dev/null || echo 0)
+  oh_agent_go slim "$name" || oh_die "desktop slim runs through the agent, which needs FreeRDP 3 (omarchy pkg add freerdp) and desktop_agent=on"
+  oh_say "Slimming the Windows VM. Removing old updates can take 30 minutes."
+  for ((i = 0; i < 3600; i++)); do
+    line=$(tail -n +$((a0 + 1)) -- "$alog" 2>/dev/null | grep -m1 'error slim') &&
+      oh_die "Windows refused it: ${line#*error slim}"
+    # The agent stops beating when Windows stops or the connection ends.
+    if oh_agent_alive; then gone=0; elif ((++gone > 30)); then
+      oh_die "the Windows session ended before slim finished; run desktop slim again"
+    fi
+    if [[ -f $log ]]; then
+      while IFS= read -r line; do
+        line=${line#$'\xef\xbb\xbf'}
+        printf '  %s\n' "${line%$'\r'}"
+      done < <(tail -n +$((n + 1)) -- "$log")
+      n=$(wc -l <"$log")
+      # Windows PowerShell starts a new file with a byte order mark.
+      grep -qE $'^(\xef\xbb\xbf)?busy' -- "$log" && return 1
+      grep -qE $'^(\xef\xbb\xbf)?done' -- "$log" && return 0
+    fi
+    sleep 1
+  done
+  oh_die "desktop slim is still running in Windows after an hour; its log: $log"
 }
 
 # The scale of the focused monitor in percent, for FreeRDP's /scale-desktop.
@@ -1202,9 +1260,10 @@ oh_desktop() {
   run) oh_desktop_run "$@" ;;
   open) oh_desktop_open "$@" ;;
   holder) oh_desktop_holder ;;
+  slim) oh_desktop_slim "$@" ;;
   update) oh_desktop_update "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|open|run|update|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|open|run|slim|update|activate|prefer|remove" ;;
   esac
 }

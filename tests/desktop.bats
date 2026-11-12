@@ -106,6 +106,14 @@ fake_vm() {
   # The plain-text password automatic sign-in used is removed.
   grep -qxF 'reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f' "$bat"
   grep -qxF 'powercfg /hibernate off' "$bat"
+  # The disk is slimmed by a SYSTEM task started once Office is in, so the
+  # sign-out does not wait for it.
+  grep -qxF '  /TR "conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OEM\slim.ps1 -Log C:\OEM\slim.log"' "$bat"
+  grep -qF 'schtasks /Create /F /TN "omarchohard-slim" /SC ONSTART /RU SYSTEM /RL HIGHEST ^' "$bat"
+  slim=$(grep -nxF 'schtasks /Run /TN "omarchohard-slim"' "$bat" | cut -d: -f1)
+  [ -n "$slim" ] && [ "$office" -lt "$slim" ]
+  [ "$(grep -c 'slim.ps1' "$bat")" -eq 1 ]
+  cmp "$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1" "$XDG_DATA_HOME/omarchohard/vm/oem/slim.ps1"
   # Seen live: Windows kept a cached listing of the inbox and never saw a
   # request, so the SMB client cache is off before anything opens the share.
   smb=$(grep -n 'Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force' "$bat" | cut -d: -f1)
@@ -912,4 +920,130 @@ esac'
     flock -n "$AGENT/holder.lock" true && break
     sleep 0.1
   done
+}
+
+current_beat() {
+  printf '1 %s\n' "$(sha256sum <"$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1" | cut -d' ' -f1)" >"$AGENT/agent.beat"
+}
+
+@test "desktop slim hands slim.ps1 to the agent and prints each step until done" {
+  agent_on
+  current_beat
+  (
+    for _ in $(seq 100); do
+      for r in "$AGENT"/*.go; do
+        [ -f "$r" ] || continue
+        mv "$r" "$BATS_TEST_TMPDIR/request"
+        log=$AGENT/$(cut -f2 "$BATS_TEST_TMPDIR/request")
+        printf '\xef\xbb\xbfstart: 27.21 GB used on C:\r\napps: 0.80 GB freed\r\n' >"$log"
+        sleep 1.5
+        printf 'done: 20.00 GB used, 7.21 GB freed\r\n' >>"$log"
+        exit 0
+      done
+      sleep 0.1
+    done
+  ) 3>&- &
+  run "$OH" desktop slim
+  wait $!
+  [ "$status" -eq 0 ]
+  re=$'^slim\tslim-[0-9]+[.]log$'
+  [[ $(cat "$BATS_TEST_TMPDIR/request") =~ $re ]]
+  cmp "$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1" "$XDG_DATA_HOME/omarchohard/vm/slim.ps1"
+  [[ $output == *"  start: 27.21 GB used on C:"* ]]
+  [[ $output == *"  apps: 0.80 GB freed"* ]]
+  [[ $output == *"  done: 20.00 GB used, 7.21 GB freed"* ]]
+  [ "$(grep -c 'start:' <<<"$output")" -eq 1 ]
+}
+
+@test "desktop slim stops at once when Windows refuses it" {
+  agent_on
+  current_beat
+  printf 'old line\n' >"$AGENT/agent.log"
+  (
+    for _ in $(seq 100); do
+      for r in "$AGENT"/*.go; do
+        [ -f "$r" ] || continue
+        rm -f "$r"
+        printf 'error slim\t%s : refused log name\n' x >>"$AGENT/agent.log"
+        exit 0
+      done
+      sleep 0.1
+    done
+  ) 3>&- &
+  SECONDS=0
+  run "$OH" desktop slim
+  wait $!
+  [ "$status" -ne 0 ]
+  [[ $output == *"Windows refused it:"*"refused log name"* ]]
+  [ "$SECONDS" -lt 10 ]
+}
+
+@test "desktop slim fails when another slim is already running in Windows" {
+  agent_on
+  current_beat
+  (
+    for _ in $(seq 100); do
+      for r in "$AGENT"/*.go; do
+        [ -f "$r" ] || continue
+        log=$AGENT/$(cut -f2 "$r")
+        rm -f "$r"
+        printf '\xef\xbb\xbfbusy: a slim is already running in Windows\r\n' >"$log"
+        exit 0
+      done
+      sleep 0.1
+    done
+  ) 3>&- &
+  SECONDS=0
+  run "$OH" desktop slim
+  wait $!
+  [ "$status" -ne 0 ]
+  [[ $output == *"  busy: a slim is already running in Windows"* ]]
+  [ "$SECONDS" -lt 10 ]
+}
+
+@test "the agent reports a slim that ends before it finishes" {
+  local ps=$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1
+  # shellcheck disable=SC2016 # PowerShell text, matched as written
+  grep -qF 'if ($p.ExitCode -ne 0) { Write-AgentLog "error slim`t$($jobs[$p]) : slim ended with exit code $($p.ExitCode) before it finished" }' "$ps"
+}
+
+@test "an agent from before an upgrade gets no slim request" {
+  agent_on
+  printf '1\n' >"$AGENT/agent.beat"
+  run "$OH" desktop slim
+  [ "$status" -ne 0 ]
+  [[ $output == *"older than this omarchohard"* ]]
+  [ -z "$(ls "$AGENT"/*.go 2>/dev/null)" ]
+}
+
+@test "with no agent, desktop slim starts one with no app and the request waiting in the queue" {
+  agent_on
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'cat >/dev/null; a=$XDG_STATE_HOME/omarchohard/agent; cp "$a"/*.go "$HOME/queued"; : >"$a/agent.beat"; printf "done\n" >"$a/$(cut -f2 "$HOME/queued")"; sleep 0.5'
+  run "$OH" desktop slim
+  [ "$status" -eq 0 ]
+  re=$'^slim\tslim-[0-9]+[.]log$'
+  [[ $(cat "$HOME/queued") =~ $re ]]
+  [ "$(sed -n 3p "$AGENT/first.cmd" | cut -d' ' -f1)" = powershell.exe ]
+  [ ! -e "$HOME/winapps.log" ]
+}
+
+@test "a cold slim whose connection fails leaves no request for the next agent" {
+  agent_on
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'cat >/dev/null; exit 131'
+  run "$OH" desktop slim
+  [ "$status" -ne 0 ]
+  [ -z "$(ls "$AGENT"/*.go "$AGENT"/*.late 2>/dev/null)" ]
+}
+
+@test "slim.ps1 keeps Office, Teams and the Store, runs one at a time, spares fresh temp files, and trims" {
+  local ps=$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1
+  [ "$(grep -cE "'(Microsoft\.Office\.Desktop|MSTeams|Microsoft\.WindowsStore|Microsoft\.DesktopAppInstaller)'" "$ps")" -eq 0 ]
+  grep -qF "New-Object Threading.Mutex(\$true, 'Global\\omarchohard-slim', [ref]\$created)" "$ps"
+  grep -qF "Where-Object LastWriteTime -LT \$day" "$ps"
+  [ "$(grep -c 'AppData.Local.Temp' "$ps")" -eq 1 ]
+  grep -qF 'Optimize-Volume -DriveLetter C -ReTrim' "$ps"
+  grep -qF "Write-Step (\"done:" "$ps"
+  grep -qF "WriteAllText(\$beat, \"\$PID \$self\")" "$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1"
 }
