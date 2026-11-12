@@ -1095,3 +1095,50 @@ current_beat() {
   grep -qF "Write-Step (\"done:" "$ps"
   grep -qF "WriteAllText(\$beat, \"\$PID \$self\")" "$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1"
 }
+
+@test "opening an app arms an idle-pause timer of its own, so a killed holder cannot keep the VM running" {
+  vm_stub
+  freerdp_stub
+  # shellcheck disable=SC2016
+  stub systemd-run 'printf "%s\n" "$@" >"$HOME/systemd-run.args"'
+  mkdir -p "$XDG_CONFIG_HOME/winapps"
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\nAUTOPAUSE="on"\nAUTOPAUSE_TIME="300"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  : >"$HOME/Notes.docx"
+  printf 'paused 0\n' >"$HOME/vm.state"
+  run "$OH" desktop run "$HOME/Notes.docx"
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/systemd-run.args" ] && break
+    sleep 0.1
+  done
+  grep -qx -- --unit=omarchohard-autopause "$HOME/systemd-run.args"
+  grep -qx -- --on-active=300s "$HOME/systemd-run.args"
+  grep -qx -- --on-unit-inactive=300s "$HOME/systemd-run.args"
+  grep -qx -- "--setenv=HOME=$HOME" "$HOME/systemd-run.args"
+  grep -qx -- "--setenv=XDG_CONFIG_HOME=$XDG_CONFIG_HOME" "$HOME/systemd-run.args"
+  [ "$(tail -n2 "$HOME/systemd-run.args")" = "$(printf 'desktop\nautopause')" ]
+}
+
+@test "the idle-pause timer pauses the VM only when no FreeRDP is connected, then stops itself" {
+  vm_stub
+  mkdir -p "$XDG_CONFIG_HOME/winapps"
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\nAUTOPAUSE="on"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  # A FreeRDP connected to the VM, as far as its command line goes.
+  sh -c 'sleep 30; :' rdp /v:127.0.0.1:3389 3>&- &
+  rdp=$!
+  run "$OH" desktop autopause
+  [ "$status" -eq 0 ]
+  run grep -c pause "$HOME/docker.log"
+  [ "$output" = 0 ] || [ "$status" -ne 0 ]
+  kill "$rdp"
+  wait "$rdp" 2>/dev/null || true
+  run "$OH" desktop autopause
+  [ "$status" -eq 0 ]
+  grep -q 'pause' "$HOME/docker.log"
+  grep -qx -- '--user stop omarchohard-autopause.timer' "$HOME/systemctl.log"
+  # With no VM config left, the timer stops instead of firing forever.
+  rm "$HOME/systemctl.log" "$XDG_CONFIG_HOME/winapps/winapps.conf"
+  run "$OH" desktop autopause
+  [ "$status" -eq 0 ]
+  grep -qx -- '--user stop omarchohard-autopause.timer' "$HOME/systemctl.log"
+}
