@@ -8,6 +8,8 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-12
+
 ### Added
 
 - Desktop Office prints to your Linux printers. omarchohard's RDP
@@ -16,6 +18,20 @@ builds are not listed; they carry the version of the next release plus a
   `RDP_FLAGS` too, for WinApps' own launches. On the test VM, pages from PowerShell's
   `Out-Printer` and from Word reached a CUPS queue; with no CUPS server the
   connection still opens and Windows lists no redirected printers.
+- The README's Sign-in section says what each tier needs: one browser
+  sign-in covers every web app and one Office sign-in covers every desktop
+  app. It also says what Windows' "Stay signed in to all your apps" prompt
+  does. Tests now fail if a web app gets its own browser profile or if
+  `desktop slim` touches Office's sign-in.
+
+### Fixed
+
+- An Office app or file opened right after the hidden connection had
+  dropped without a sign-out could open nothing while the command reported
+  success. Windows reconnected the old session, which does not run the
+  start command again. The request now waits in the agent's queue too, so
+  the reconnected agent runs it, and when nothing takes it within 5 seconds
+  WinApps opens it.
 
 ## [0.2.0] - 2026-11-12
 
@@ -157,7 +173,8 @@ builds are not listed; they carry the version of the next release plus a
   default changes, and apps start with setsid rather than uwsm-app.
   `open --app word` takes 18 ms before the browser starts.
 
-[Unreleased]: https://github.com/baney75/omarchohard/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/baney75/omarchohard/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/baney75/omarchohard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/baney75/omarchohard/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/baney75/omarchohard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/baney75/omarchohard/releases/tag/v0.1.0
