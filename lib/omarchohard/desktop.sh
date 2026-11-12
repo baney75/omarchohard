@@ -724,11 +724,17 @@ oh_agent_queue() {
 # Start the holder with the first request in first.cmd. The app starts at
 # once and the agent after it in the same hidden console, so the first
 # window does not wait for PowerShell (2.0 s against 4.0 s, measured).
-# Waits for the agent's first beat, up to 30 s. Returns 1 when another
-# holder holds the lock, 2 when the holder's FreeRDP ended before the agent
-# beat (a refused certificate, a wrong password), so WinApps can show why.
+# The request also waits in the queue, and first.cmd claims it by the same
+# rename the agent uses: a session that was only disconnected comes back
+# with its agent still running and does not run first.cmd again, and that
+# agent runs the request instead (lost before, seen on the test VM).
+# Waits up to 30 s for the agent's first beat and then up to 5 s for the
+# request to be claimed. Returns 1 when another holder holds the lock, 2
+# when the holder's FreeRDP ended before the agent beat (a refused
+# certificate, a wrong password) or nothing claimed the request, so WinApps
+# can open it or show why.
 oh_agent_start() {
-  local verb=$1 arg=$2 lock start q ps warm i queued=''
+  local verb=$1 arg=$2 lock start q ps warm i queued name
   exec {lock}>"$OH_AGENT_DIR/holder.lock"
   if ! flock -n "$lock"; then
     exec {lock}>&-
@@ -749,7 +755,8 @@ oh_agent_start() {
   esac
   # cmd expands %NAME% even inside quotes; %% is a literal %.
   [[ -z $start || -z $arg ]] || start+=" \"${arg//%/%%}\""
-  [[ -n $start ]] || queued=$(oh_agent_queue "$verb" "$arg") || return 2
+  queued=$(oh_agent_queue "$verb" "$arg") || return 2
+  name=${queued##*/}
   # shellcheck disable=SC1003 # a Windows path ends in a backslash
   q='\\tsclient\home\'${OH_AGENT_DIR#"$HOME"/} ps='\\tsclient\home\'${OH_AGENT_PS1#"$HOME"/}
   mkdir -p "${OH_AGENT_PS1%/*}"
@@ -761,7 +768,10 @@ oh_agent_start() {
   [[ -z $warm ]] || warm=" -Warm \"$warm\""
   {
     printf '@echo off\r\nchcp 65001 >nul\r\n'
-    [[ -z $start ]] || printf '%s\r\n' "$start"
+    # move fails when the agent claimed the request first, and then the
+    # app is not started twice.
+    [[ -z $start ]] || printf 'move "%s\\%s" "%s\\%s.first" >nul 2>&1 && %s\r\ndel "%s\\%s.first" >nul 2>&1\r\n' \
+      "${q//\//\\}" "$name" "${q//\//\\}" "$name" "$start" "${q//\//\\}" "$name"
     printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"%s\r\n' \
       "${ps//\//\\}" "${q//\//\\}" "$warm"
   } >"$OH_AGENT_DIR/first.cmd"
@@ -771,18 +781,25 @@ oh_agent_start() {
   exec {lock}>&-
   # The holder lets go of the lock when FreeRDP ends.
   for ((i = 0; i < 300; i++)); do
-    [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+    [[ -e $OH_AGENT_DIR/agent.beat ]] && break
     exec {lock}>"$OH_AGENT_DIR/holder.lock"
     if flock -n "$lock"; then
       exec {lock}>&-
-      [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
-      # Take a queued request back, so the next agent does not run it.
-      [[ -z $queued ]] || { mv -- "$queued" "$queued.late" 2>/dev/null && rm -f -- "$queued.late"; }
+      [[ -e $OH_AGENT_DIR/agent.beat ]] && break
+      # Take the request back, so the next agent does not run it.
+      mv -- "$queued" "$queued.late" 2>/dev/null && rm -f -- "$queued.late"
       return 2
     fi
     exec {lock}>&-
     sleep 0.1
   done
+  for ((i = 0; i < 50; i++)); do
+    [[ -e $queued ]] || return 0
+    sleep 0.1
+  done
+  mv -- "$queued" "$queued.late" 2>/dev/null || return 0
+  rm -f -- "$queued.late"
+  return 2
 }
 
 # Open VERB [ARG] through the agent: hand it over when the agent is up, or
