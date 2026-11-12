@@ -179,7 +179,7 @@ oh_setup_entry_write() {
     printf '[Desktop Entry]\nVersion=1.0\nType=Application\n'
     printf 'Name=Microsoft 365 Setup\n'
     printf 'Comment=Set up Word, Excel, PowerPoint, Outlook, Teams and OneDrive on Omarchy\n'
-    printf 'Exec=%s setup --gui\n' "$bin"
+    printf 'Exec=%s setup --gui\n' "$(oh_desktop_exec_arg "$bin")"
     printf 'Icon=omarchohard-m365\nTerminal=false\nCategories=Settings;Office;\n'
     printf 'Keywords=Microsoft;Office;365;OneDrive;setup;sign in;\n'
   } >"$file"
@@ -249,9 +249,15 @@ oh_setup() {
   isolated) choice=Keep ;;
   default) choice=Share ;;
   *)
-    choice=$(oh_ui_choose "How should the apps sign in?" \
-      "Share this browser's sign-in and extensions (recommended)" \
-      "Keep Microsoft 365 in its own profile") || oh_die "setup cancelled"
+    if oh_ui_interactive; then
+      choice=$(oh_ui_choose "How should the apps sign in?" \
+        "Share this browser's sign-in and extensions (recommended)" \
+        "Keep Microsoft 365 in its own profile") || oh_die "setup cancelled"
+    else
+      # Unattended runs keep the profile the apps are already signed in to.
+      choice=Share
+      [[ $(oh_config_get profile) != isolated ]] || choice=Keep
+    fi
     ;;
   esac
   if [[ $choice == Keep* ]]; then
@@ -325,11 +331,13 @@ oh_setup() {
       oh_ui_interactive || od="Not now"
     fi
     if [[ $od != "Not now" && $od != none ]]; then
+      # A subshell, as a failed sign-in ends oh_onedrive_setup with oh_die.
       case $od in
-      *rclone*) oh_onedrive_setup --client rclone <&"${OH_TTY_FD:-0}" || oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup" ;;
-      *abraunegg*) oh_onedrive_setup --client abraunegg <&"${OH_TTY_FD:-0}" || oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup" ;;
+      *rclone*) (oh_onedrive_setup --client rclone) <&"${OH_TTY_FD:-0}" || oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup" ;;
+      *abraunegg*) (oh_onedrive_setup --client abraunegg) <&"${OH_TTY_FD:-0}" || oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup" ;;
       *) oh_dim "Later: omarchohard onedrive setup" ;;
       esac
+      OH_CFG_LOADED=0 && oh_config_load
     else
       oh_dim "Later: omarchohard onedrive setup"
     fi

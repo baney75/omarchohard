@@ -84,7 +84,8 @@ oh_probe_recommend() {
   [[ -r /dev/kvm && -w /dev/kvm ]] || missing+=("KVM")
   oh_desktop_engine >/dev/null 2>&1 || missing+=("Docker or Podman")
   oh_has_freerdp || missing+=("FreeRDP 3")
-  ((P_MEM_TOTAL >= 16384)) || missing+=("16 GiB of memory")
+  # 15 GiB: a 16 GB machine reports about 15.4 GiB once the kernel takes its share.
+  ((P_MEM_TOTAL >= 15360)) || missing+=("16 GiB of memory")
   ((P_MEM_AVAIL >= 6144)) || missing+=("6 GiB free memory")
   ((P_DISK_FREE >= 80)) || missing+=("80 GB free disk")
   if ((${#missing[@]} == 0)); then
@@ -148,8 +149,9 @@ oh_probe() {
 # Apply what probe recommends. Without --apply it only prints the plan.
 oh_optimize() {
   oh_config_load
-  local apply=0 changed=0
+  local apply=0 changed=0 cache_before
   [[ ${1:-} == --apply ]] && apply=1
+  cache_before=$(oh_config_get onedrive_cache_size)
   oh_probe_facts
   oh_probe_recommend
 
@@ -185,8 +187,9 @@ oh_optimize() {
     fi
   fi
 
-  # A new cache size takes effect when the mount unit is rewritten.
-  if ((apply && changed)) && [[ $(oh_config_get onedrive_client) == rclone && -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT ]]; then
+  # A new cache size takes effect when the mount unit is rewritten. Only then:
+  # a restart unmounts OneDrive under any open document.
+  if ((apply)) && [[ $(oh_config_get onedrive_cache_size) != "$cache_before" ]] && [[ $(oh_config_get onedrive_client) == rclone && -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT ]]; then
     oh_onedrive_rclone_unit "$(oh_config_get onedrive_dir)" "$(oh_config_get onedrive_remote)"
     oh_run systemctl --user daemon-reload
     oh_run systemctl --user restart "$OH_ONEDRIVE_UNIT" && oh_ok "OneDrive mount restarted with the new cache size"

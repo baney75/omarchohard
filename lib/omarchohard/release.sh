@@ -49,12 +49,13 @@ oh_channel() {
 # so a failed download or checksum leaves everything as it was.
 oh_update() {
   oh_config_load
-  local check=0 channel='' latest tmp dest
+  local check=0 channel='' asked=0 latest tmp dest
   while (($#)); do
     case $1 in
     --check) check=1 ;;
     --channel)
       channel=${2:?--channel needs stable, nightly or dev}
+      asked=1
       shift
       ;;
     *) oh_die "unknown update option: $1" ;;
@@ -64,11 +65,14 @@ oh_update() {
   [[ -n $channel ]] || channel=$(oh_config_get channel)
   oh_channel_valid "$channel" || oh_die "config has an unknown channel '$channel'"
 
+  # The package decides which build runs, so a channel written here would
+  # only make the config disagree with it.
   if ! oh_self_managed && [[ -z ${OMARCHOHARD_FORCE_SELF_UPDATE:-} ]]; then
-    ((check)) || oh_channel_commit "$channel"
     oh_say "omarchohard at $OH_ROOT was installed by a package manager."
     oh_say "Update it there: the AUR package 'omarchohard' follows stable, 'omarchohard-git' follows dev."
-    return 0
+    ((asked)) || return 0
+    oh_err "the channel was not changed; switch packages to change it"
+    return 1
   fi
 
   tmp=$(mktemp -d)
@@ -76,7 +80,8 @@ oh_update() {
   oh_fetch "$(oh_channel_url "$channel" omarchohard.version)" "$tmp/version" ||
     oh_die "could not reach the $channel channel at $(oh_release_base)"
   latest=$(tr -d '[:space:]' <"$tmp/version")
-  [[ $latest =~ ^[0-9A-Za-z.+_-]+$ ]] || oh_die "the $channel channel returned a bad version: $latest"
+  # It names a directory that is replaced with rm -rf, so no "..".
+  [[ $latest =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]*$ && $latest != *..* ]] || oh_die "the $channel channel returned a bad version: $latest"
   if [[ $latest == "$(oh_version)" ]]; then
     ((check)) || oh_channel_commit "$channel"
     oh_ok "up to date: $latest ($channel)"

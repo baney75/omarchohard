@@ -40,7 +40,7 @@ dev)
   ;;
 *) die "usage: build-release.sh <stable|nightly|dev> [outdir]" ;;
 esac
-[[ $version =~ ^[0-9A-Za-z.+_-]+$ ]] || die "bad version string: $version"
+[[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]*$ && $version != *..* ]] || die "bad version string: $version"
 
 for f in bin/omarchohard lib/omarchohard share/omarchohard LICENSE README.md CHANGELOG.md; do
   [[ -e $root/$f ]] || die "missing $f"

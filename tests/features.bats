@@ -197,3 +197,81 @@ onedrive_rclone() {
   [ "$status" -eq 0 ]
   grep -qx "Exec=$HOME/.local/bin/omarchohard open --app word %U" "$APPS/omarchohard-word.desktop"
 }
+
+# rclone link that works for one scope only.
+link_only_for() {
+  # shellcheck disable=SC2016
+  stub rclone "printf '%s\n' \"\$*\" >>\"\$HOME/rclone.log\"
+case \"\$*\" in link*'--onedrive-link-scope $1 '*) echo https://contoso-my.sharepoint.com/:w:/g/x ;; link*) exit 1 ;; esac"
+}
+
+@test "share --link falls back to an anyone link when the account has no organization" {
+  onedrive_rclone
+  printf 'email=you@gmail.com\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  printf 'x' >"$HOME/OneDrive/Docs/Plan.docx"
+  link_only_for anonymous
+  run "$OH" share --link "$HOME/OneDrive/Docs/Plan.docx"
+  [ "$status" -eq 0 ]
+  [[ $output == *"https://contoso-my.sharepoint.com/:w:/g/x"* ]]
+  [[ $output == *"anyone with the link"* ]]
+  grep -q 'link-scope organization' "$HOME/rclone.log"
+}
+
+@test "share --link falls back to an organization link when anyone links are off" {
+  onedrive_rclone
+  printf 'x' >"$HOME/OneDrive/Docs/Plan.docx"
+  link_only_for organization
+  run "$OH" share --link "$HOME/OneDrive/Docs/Plan.docx"
+  [ "$status" -eq 0 ]
+  [[ $output == *"people in your organization"* ]]
+}
+
+@test "setup --yes without --shared or --isolated keeps the isolated profile" {
+  printf 'profile=isolated\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  run "$OH" setup --yes --browser chromium --onedrive none --prewarm off
+  [ "$status" -eq 0 ]
+  grep -qx 'profile=isolated' "$XDG_CONFIG_HOME/omarchohard/config"
+  grep -qx 'StartupWMClass=chrome-word.cloud.microsoft__-Omarchohard' "$APPS/omarchohard-word.desktop"
+}
+
+@test "setup keeps going and runs the final check when the OneDrive sign-in fails" {
+  # shellcheck disable=SC2016
+  stub rclone 'case "$1" in config) exit 1 ;; esac; exit 0'
+  run "$OH" setup --yes --browser chromium --onedrive rclone
+  [ "$status" -eq 0 ]
+  [[ $output == *"rclone sign-in did not finish"* ]]
+  [[ $output == *"OneDrive is not set up yet"* ]]
+  [[ $output == *"Checking everything"* ]]
+}
+
+@test "optimize --apply restarts the OneDrive mount only when the cache size changes" {
+  cache=$("$OH" probe --json | jq -r .recommend.onedrive_cache_size.value)
+  want=$("$OH" probe --json | jq -r .recommend.prewarm.value)
+  printf 'profile=isolated\nonedrive_client=rclone\nonedrive_cache_size=%s\n' "$cache" >>"$XDG_CONFIG_HOME/omarchohard/config"
+  mkdir -p "$XDG_CONFIG_HOME/systemd/user"
+  : >"$XDG_CONFIG_HOME/systemd/user/omarchohard-onedrive.service"
+  # Make prewarm differ from the recommendation, so optimize changes something.
+  if [ "$want" = off ]; then
+    # shellcheck disable=SC2016
+    stub systemctl 'printf "%s\n" "$*" >>"$HOME/systemctl.log"; exit 0'
+  fi
+  run "$OH" optimize --apply
+  [ "$status" -eq 0 ]
+  [[ $output == *"prewarm"* ]]
+  run grep -q 'restart omarchohard-onedrive' "$HOME/systemctl.log"
+  [ "$status" -ne 0 ]
+}
+
+@test "two imports of different files with the same name keep both" {
+  onedrive_rclone
+  stub rclone 'exit 0'
+  mkdir -p "$HOME/a" "$HOME/b"
+  printf 'one\n' >"$HOME/a/Report.docx"
+  printf 'two\n' >"$HOME/b/Report.docx"
+  "$OH" open "$HOME/a/Report.docx" >/dev/null 2>&1 &
+  "$OH" open "$HOME/b/Report.docx" >/dev/null 2>&1 &
+  wait
+  dir=$HOME/OneDrive/Omarchohard
+  [ "$(cat "$dir/Report.docx" "$dir/Report (1).docx" | sort | tr '\n' ' ')" = "one two " ]
+  [ -z "$(find "$dir" -name '.omarchohard-import.*')" ]
+}

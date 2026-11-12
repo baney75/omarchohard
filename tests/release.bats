@@ -147,13 +147,41 @@ installed() { "$HOME/.local/bin/omarchohard" "$@"; }
   [ "$(installed version)" = "omarchohard $STABLE" ]
 }
 
-@test "a package-managed install prints the AUR message and exits 0" {
+@test "a package-managed install prints the AUR message; a channel switch changes nothing and fails" {
   run "$OH" update
   [ "$status" -eq 0 ]
   [[ $output == *"installed by a package manager"* ]]
   [[ $output == *"AUR package 'omarchohard'"* ]]
   run "$OH" channel dev
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   [[ $output == *"omarchohard-git"* ]]
+  run grep -q '^channel=' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$status" -ne 0 ]
   [ ! -e "$DATA/releases" ]
+}
+
+@test "install.sh stops before downloading when ~/.local/bin/omarchohard is a regular file" {
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\n' >"$HOME/.local/bin/omarchohard"
+  run bash "$OH_REPO_ROOT/install.sh"
+  [ "$status" -eq 1 ]
+  [[ $output == *"is not a symlink"* ]]
+  [[ $output != *"Fetching"* ]]
+  [ ! -e "$DATA" ]
+}
+
+@test "a channel version of .. is refused by install.sh and by update" {
+  mkdir -p "$DATA/keep"
+  cp -r "$RB" "$BATS_TEST_TMPDIR/bad"
+  printf '..\n' >"$BATS_TEST_TMPDIR/bad/latest/download/omarchohard.version"
+  OMARCHOHARD_RELEASE_BASE=file://$BATS_TEST_TMPDIR/bad run bash "$OH_REPO_ROOT/install.sh" --no-setup
+  [ "$status" -eq 1 ]
+  [[ $output == *"bad version"* ]]
+  [ -d "$DATA/keep" ]
+  bash "$OH_REPO_ROOT/install.sh" --no-setup >/dev/null 2>&1
+  printf '1.0..2\n' >"$BATS_TEST_TMPDIR/bad/download/nightly/omarchohard.version"
+  OMARCHOHARD_RELEASE_BASE=file://$BATS_TEST_TMPDIR/bad run installed channel nightly
+  [ "$status" -eq 1 ]
+  [[ $output == *"bad version"* ]]
+  [ -d "$DATA/keep" ]
 }

@@ -136,6 +136,10 @@ main() {
   current=$data/current
   bindir=$HOME/.local/bin
   link=$bindir/omarchohard
+  # Before anything is downloaded or changed.
+  if [[ -e $link && ! -L $link ]]; then
+    die "$link exists and is not a symlink; move it away and run this again"
+  fi
 
   tmp=$(mktemp -d)
   # shellcheck disable=SC2064 # expand now: tmp is local to main
@@ -145,7 +149,8 @@ main() {
   fetch "$(channel_url "$channel" omarchohard.version)" "$tmp/version" ||
     die "could not reach the $channel channel at $OH_BASE"
   version=$(tr -d '[:space:]' <"$tmp/version")
-  [[ $version =~ ^[0-9A-Za-z.+_-]+$ ]] || die "the $channel channel returned a bad version: $version"
+  # It names a directory that is replaced with rm -rf, so no "..".
+  [[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]*$ && $version != *..* ]] || die "the $channel channel returned a bad version: $version"
 
   fetch "$(channel_url "$channel" omarchohard.tar.gz)" "$tmp/omarchohard.tar.gz" || die "download failed"
   fetch "$(channel_url "$channel" omarchohard.tar.gz.sha256)" "$tmp/sha256" || die "checksum download failed"
@@ -166,9 +171,6 @@ main() {
   ok "installed to $dest"
 
   mkdir -p "$bindir"
-  if [[ -e $link && ! -L $link ]]; then
-    die "$link exists and is not a symlink; move it away and run this again"
-  fi
   ln -sfn "$current/bin/omarchohard" "$link"
   ok "linked $link"
 
