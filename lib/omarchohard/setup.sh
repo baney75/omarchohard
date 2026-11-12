@@ -261,7 +261,10 @@ oh_setup_files() {
     ext=${ext%% *}
     [[ -z $on || $on == *" $ext "* ]] && sel+=${sel:+,}$label
   done
-  mapfile -t picked < <(OH_PICK_SELECTED=$sel oh_ui_pick "Which other formats? (space toggles, Enter confirms)" "${offer[@]}")
+  # Esc in gum is a cancel, not an empty pick that would turn every format off.
+  local out
+  out=$(OH_PICK_SELECTED=$sel oh_ui_pick "Which other formats? (space toggles, Enter confirms)" "${offer[@]}") || return 1
+  [[ -z $out ]] || mapfile -t picked <<<"$out"
   for label in "${picked[@]}"; do
     label=${label#.}
     want+=${want:+,}${label%% *}

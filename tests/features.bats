@@ -506,6 +506,21 @@ other_defaults() {
   [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
 }
 
+@test "Esc at the format list cancels setup and keeps the saved choice" {
+  oh_install_quiet
+  "$OH" files odt,csv >/dev/null
+  # gum: the files question answers "other formats too"; Esc at the list.
+  # shellcheck disable=SC2016
+  stub gum 'case "$1" in style | input) exit 0 ;; confirm) exit 1 ;; esac
+case "$*" in *--no-limit*) exit 130 ;; *"Which files"*) echo "Microsoft Office files and other formats too" ;; esac'
+  unset OMARCHOHARD_NO_GUM
+  OMARCHOHARD_TTY=/dev/null run "$OH" setup --tier web --browser chromium --shared --apps all --no-mail --onedrive none --prewarm off
+  [ "$status" -ne 0 ]
+  [[ $output == *"setup cancelled"* ]]
+  grep -qx 'files=odt,csv' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+}
+
 @test "interactive setup offers only the formats of the apps picked, and skips the question without them" {
   answers=$BATS_TEST_TMPDIR/answers
   # apps 2 (Excel): the other formats are .ods and .csv; pick 2 (.csv)
