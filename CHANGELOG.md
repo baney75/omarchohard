@@ -36,6 +36,9 @@ builds are not listed; they carry the version of the next release plus a
   launchers again and claims the file types omarchohard never had, such as
   .ppsm, without running `omarchohard install`. A type you gave to another
   app stays with it.
+- A double-click no longer opens nothing after Windows kept an old session
+  without its agent. The agent stays while any window is open and signs its
+  session out when it goes idle, so the next open starts a fresh one.
 - Desktop Office pauses its idle VM reliably. The pause ran inside the
   FreeRDP holder, so a holder that was killed first (a logout, a closed
   terminal) left Windows running, using about 4 GB of memory and 13% of a

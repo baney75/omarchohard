@@ -116,10 +116,16 @@ function Start-WarmApps {
   }
 }
 
-# Office with a window on screen counts as use, so the agent stays while
-# you work, and so does a slim still running. A hidden warm app does not.
+# Any window in this session counts as use, Office or not, so the agent
+# stays while you work, and so does a slim still running. A hidden warm
+# app does not, and neither do the RemoteApp shell's own windows.
 $jobs = @{}
-function Test-OfficeInUse {
+$session = (Get-Process -Id $PID).SessionId
+$shell = 'rdpinit', 'rdpshell', 'ShellAppRuntime', 'ShellHost', 'TextInputHost', 'LockApp', 'LogonUI'
+function Test-SessionWindow {
+  [bool](Get-Process | Where-Object { $_.SessionId -eq $session -and $_.MainWindowHandle -ne 0 -and $shell -notcontains $_.ProcessName })
+}
+function Test-InUse {
   # A slim that ended with an error tells the host, which is waiting for its
   # log to say done.
   foreach ($p in @($jobs.Keys)) {
@@ -128,7 +134,7 @@ function Test-OfficeInUse {
     $jobs.Remove($p)
   }
   if ($jobs.Count) { return $true }
-  [bool](Get-Process -Name $exe.Values -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+  Test-SessionWindow
 }
 
 $beat = Join-Path $Queue 'agent.beat'
@@ -158,7 +164,7 @@ while (([DateTime]::UtcNow - $last).TotalMinutes -lt $IdleMinutes) {
   if (($now - $lastBeat).TotalSeconds -ge 2) {
     try { [IO.File]::WriteAllText($beat, "$PID $self") } catch {}
     $lastBeat = $now
-    if (Test-OfficeInUse) { $last = $now }
+    if (Test-InUse) { $last = $now }
   }
   # A request goes first; warming waits for a quiet moment.
   if (($now - $lastWarm).TotalSeconds -ge 10 -and ($now - $lastRequest).TotalSeconds -ge 3) {
@@ -175,4 +181,12 @@ foreach ($id in $warmPids.Keys) {
   if ($p -and $p.MainWindowHandle -eq 0) { Stop-Process -Id $id -Force }
 }
 try { [IO.File]::Delete($beat) } catch {}
-$mutex.ReleaseMutex()
+# Then the session itself, unless something in it still has a window. A
+# RemoteApp connection reattaches to a disconnected session and never runs
+# its startup command there, so a session left behind without its agent
+# opened nothing again until it was signed out (seen on the test VM,
+# 2026-11-12: Word with no window and a finished script kept it alive).
+if (-not (Test-SessionWindow)) {
+  Write-AgentLog 'signing the session out'
+  logoff.exe
+}
