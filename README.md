@@ -237,7 +237,7 @@ omarchohard share --link --edit Budget.xlsx # an edit link
 
 | Channel | What it is | Version example | Install with |
 | --- | --- | --- | --- |
-| stable | The newest tagged release | `0.1.0` | `curl -fsSL .../install.sh \| bash` |
+| stable | The newest tagged release | `0.1.1` | `curl -fsSL .../install.sh \| bash` |
 | nightly | A build of `main` at 06:00 UTC that passed the full test suite; skipped when `main` has not changed | `0.1.0-nightly.20261111+636ab6e` | `... \| bash -s -- --channel nightly` |
 | dev | Every push to `main` that passed CI | `0.1.0-dev.42+636ab6e` | `... \| bash -s -- --channel dev` |
 

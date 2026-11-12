@@ -276,7 +276,7 @@ oh_onedrive_remove() {
   local quiet=0 remote
   [[ ${1:-} == --quiet ]] && quiet=1
   remote=$(oh_config_get onedrive_remote)
-  # Tried even without a unit file: 0.1.0's uninstall deleted it under a running service.
+  # Tried even without a unit file: an earlier uninstall deleted it under a running service.
   oh_onedrive_stop_or_die
   rm -f "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT"
   systemctl --user daemon-reload >/dev/null 2>&1 || true

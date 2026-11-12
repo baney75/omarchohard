@@ -8,6 +8,14 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-11
+
+### Fixed
+
+- `setup --prewarm off`, the default in the one-line install, no longer stops
+  with "Failed to connect to user scope bus" where no systemd user manager
+  runs, such as a container or a fresh SSH session.
+
 ## [0.1.0] - 2026-11-11
 
 ### Added
@@ -55,5 +63,6 @@ builds are not listed; they carry the version of the next release plus a
   default changes, and apps start with setsid rather than uwsm-app.
   `open --app word` takes 18 ms before the browser starts.
 
-[Unreleased]: https://github.com/baney75/omarchohard/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/baney75/omarchohard/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/baney75/omarchohard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/baney75/omarchohard/releases/tag/v0.1.0

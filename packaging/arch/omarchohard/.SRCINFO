@@ -1,6 +1,6 @@
 pkgbase = omarchohard
 	pkgdesc = Microsoft 365 web apps as desktop apps on Omarchy (Arch + Hyprland)
-	pkgver = 0.1.0
+	pkgver = 0.1.1
 	pkgrel = 1
 	url = https://github.com/baney75/omarchohard
 	arch = any
@@ -16,7 +16,7 @@ pkgbase = omarchohard
 	optdepends = onedrive-abraunegg: OneDrive two-way sync client
 	optdepends = freerdp: desktop tier (WinApps RemoteApp windows)
 	optdepends = docker: desktop tier (Windows VM)
-	source = omarchohard-0.1.0.tar.gz::https://github.com/baney75/omarchohard/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = 86d12335ad56af6c152cc84329bc2c6d83f0dde7d945a381f0741bd9f0e684e7
+	source = omarchohard-0.1.1.tar.gz::https://github.com/baney75/omarchohard/archive/refs/tags/v0.1.1.tar.gz
+	sha256sums = SKIP
 
 pkgname = omarchohard
