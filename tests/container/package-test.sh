@@ -83,7 +83,9 @@ ver=$(sed -n 's/^pkgver=//p' "$build/PKGBUILD")
 [[ $ver == "$(cat "$work/src/VERSION")" ]] || fail "PKGBUILD pkgver $ver does not match VERSION"
 # The same layout GitHub serves for refs/tags/vX.Y.Z.tar.gz.
 git -C "$work/src" archive --format=tar.gz --prefix="omarchohard-$ver/" -o "$build/omarchohard-$ver.tar.gz" HEAD
-(cd "$build" && makepkg -f --noconfirm --syncdeps >"$work/makepkg-stable.log" 2>&1) || {
+# A local archive is not byte for byte GitHub's, so its checksum cannot
+# match the PKGBUILD's; the release workflow checks that one against GitHub.
+(cd "$build" && makepkg -f --noconfirm --syncdeps --skipchecksums >"$work/makepkg-stable.log" 2>&1) || {
   tail -n 30 "$work/makepkg-stable.log"
   fail "makepkg omarchohard"
 }

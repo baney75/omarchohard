@@ -20,8 +20,7 @@ optdepends=(
   'docker: desktop tier (Windows VM)'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# SKIP until the v0.1.0 tag exists; see the bump steps above.
-sha256sums=('SKIP')
+sha256sums=('86d12335ad56af6c152cc84329bc2c6d83f0dde7d945a381f0741bd9f0e684e7')
 
 package() {
   cd "$pkgname-$pkgver"
