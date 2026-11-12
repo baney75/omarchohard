@@ -269,9 +269,21 @@ omarchohard share --link --edit Budget.xlsx # an edit link
 
 ## Sign-in
 
+Using both tiers takes two sign-ins in all: one in the browser for every web
+app, and one in Office for every desktop app.
+
 - **Desktop Office** signs in once, in Office's own window: an unlicensed
-  Microsoft 365 opens "Sign in to get started" with Microsoft's sign-in
-  inside Office. It works like any other window.
+  Microsoft 365 opens "Sign in to get started", and "Sign in or create
+  account" opens Microsoft's sign-in page as its own window on your desktop.
+  Word, Excel, PowerPoint, Outlook and OneNote run as the same Windows user,
+  so they share that one account through Windows' account manager, and the
+  sign-in activates Microsoft 365 for all of them. `desktop slim` leaves the
+  sign-in alone.
+- **Stay signed in to all your apps.** After a school or work sign-in,
+  Windows asks this. OK registers the VM with your organization so the
+  other Microsoft apps in Windows reuse the sign-in too. Untick "Allow my
+  organization to manage my device" first unless you want your school or
+  employer to manage the VM; the sign-in works either way.
 - **The web apps** sign in through your default browser. Every app uses single
   sign-on (SSO) in your default browser profile. Sign in
   once with `omarchohard login` (or in any app window) and every app is signed
@@ -373,7 +385,8 @@ omarchohard desktop update           # update Office and Windows now
   `--channel current|monthly|semi-annual` and `--to VERSION` choose what to
   update to. `omarchohard doctor` shows the Office version and channel.
 - **Sign-in.** Microsoft 365 activates when you sign in once in Office's own
-  sign-in window ("Sign in to get started with Word"). Until then Office
+  sign-in window ("Sign in to get started with Word"), and that one sign-in
+  covers every Office app ([Sign-in](#sign-in)). Until then Office
   opens in reduced functionality mode: you can view and print,
   not edit. A bought Office 2021 or 2024 key goes in with
   `omarchohard desktop activate`, and a Windows key with

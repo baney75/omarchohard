@@ -162,9 +162,15 @@ and a new install bring the new scripts.
   uninstall and `desktop remove` take out exactly that line and the file. With
   the older `hyprland.conf`, nothing is written and doctor warns.
 - **Sign-in.** Desktop Office signs in once in Office's own window: an
-  unlicensed Microsoft 365 opens "Sign in to get started with Word", with
-  Microsoft's sign-in inside Office. The web apps sign in through your
-  default browser.
+  unlicensed Microsoft 365 opens "Sign in to get started with Word", and
+  "Sign in or create account" opens Microsoft's sign-in page as a RemoteApp
+  window of its own. Every Office app runs as the one Windows user, so they
+  share the account through Windows' Web Account Manager (the `TokenBroker`
+  service and the `Microsoft.AAD.BrokerPlugin` package), and one sign-in
+  activates them all. On the test VM (2026-11-12) both services ran, the
+  broker packages were installed, and the sign-in page opened with
+  dockur's default of UAC off. `desktop slim` removes none of them. The web
+  apps sign in through your default browser.
 - omarchohard starts WinApps, its setup and FreeRDP with `KRB5_CONFIG=/dev/null`
   in their environment only. FreeRDP otherwise tries Kerberos first with
   Arch's example `/etc/krb5.conf`, which fails, costs about 0.1 s and prints
