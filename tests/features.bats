@@ -317,3 +317,10 @@ signer_ok() {
   [ "$(cat "$dir/Report.docx" "$dir/Report (1).docx" | sort | tr '\n' ' ')" = "one two " ]
   [ -z "$(find "$dir" -name '.omarchohard-import.*')" ]
 }
+
+@test "setup --prewarm off finishes when no user manager is running" {
+  stub systemctl 'echo "Failed to connect to user scope bus" >&2; exit 1'
+  run "$OH" setup --yes --browser chromium --isolated --onedrive none --prewarm off
+  [ "$status" -eq 0 ]
+  [[ $output == *"Checking everything"* ]]
+}

@@ -57,7 +57,8 @@ for channel in stable nightly dev; do
     export PATH=$HOME/.local/bin:$stubs:$PATH
     export OMARCHOHARD_RELEASE_BASE=$base OMARCHOHARD_NO_UWSM=1 NO_COLOR=1
 
-    curl -fsSL "$base/install.sh" | bash -s -- --channel "$channel"
+    # The README's one-liner, setup flags included; there is no user manager here.
+    curl -fsSL "$base/install.sh" | bash -s -- --channel "$channel" -- --yes --browser chromium --isolated --onedrive none --prewarm off
     expect_version "${want[$channel]}"
     grep -qx "channel=$channel" "$HOME/.config/omarchohard/config" || fail "config channel is not $channel"
     printf 'browser=chromium\n' >>"$HOME/.config/omarchohard/config"

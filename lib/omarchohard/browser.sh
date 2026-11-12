@@ -179,9 +179,12 @@ EOF
     oh_ok "prewarm on (about 215 MB resident; apps open in about 0.2 s)"
     ;;
   off)
-    oh_run systemctl --user disable --now "$OH_PREWARM_UNIT" 2>/dev/null || true
-    rm -f "$OH_UNIT_DIR/$OH_PREWARM_UNIT"
-    oh_run systemctl --user daemon-reload
+    # Nothing to undo without the unit, and no user manager may be running.
+    if [[ -f $OH_UNIT_DIR/$OH_PREWARM_UNIT ]]; then
+      oh_run systemctl --user disable --now "$OH_PREWARM_UNIT" 2>/dev/null || true
+      rm -f "$OH_UNIT_DIR/$OH_PREWARM_UNIT"
+      oh_run systemctl --user daemon-reload 2>/dev/null || true
+    fi
     oh_ok "prewarm off"
     ;;
   status)
