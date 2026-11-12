@@ -144,7 +144,9 @@ and a new install bring the new scripts.
 
 - `omarchohard open --app word` (and `excel`, `powerpoint`, `outlook`,
   `onenote`) raises the open window of that app through `hyprctl`, or starts
-  it through WinApps. With a file it always opens the file. Teams stays a web
+  it through the agent (below). With a file it always opens the file.
+  `omarchohard desktop open APP [FILE...]` does the same whatever
+  `open_with` says; WinApps' own launcher entries are pointed at it. Teams stays a web
   app. Windows are found by title (`Report.docx - Word`, or `Microsoft Word`
   with no document; Outlook and OneNote titles end in `Outlook` and
   `OneNote`), not by class: each new RemoteApp connection gives every window
@@ -169,12 +171,37 @@ and a new install bring the new scripts.
   errors, before it falls back to NTLM.
 - `omarchohard desktop run FILE` opens any file in Windows with the program
   Windows picks: an add-in (`.xll`, `.xlam`, `.ppam`, `.dotm`, `.vsto`), an
-  installer or a document. It runs `explorer.exe` as a RemoteApp on the file's
-  `\\tsclient\home` path. Files must be under your home folder or
+  installer or a document, through the agent, or without it as an
+  `explorer.exe` RemoteApp on the file's `\\tsclient\home` path. Files must be under your home folder or
   `/run/media`, and names with control characters are refused. The
   connection details come from `~/.config/winapps/winapps.conf`, read as text
   and never run, and FreeRDP reads the password from standard input
   (`/from-stdin:force`), so it is never on the command line.
+- **The agent.** A new RDP connection per launch costs about a second
+  before Windows starts the app. So omarchohard keeps one hidden FreeRDP
+  RemoteApp connection, the holder, running `agent.ps1` in the Windows
+  session. A launch writes one request line to
+  `~/.local/state/omarchohard/agent` (a 0700 folder); the agent reads it
+  over the RDP drive within 0.1 s, starts the app, and the window comes
+  through the same connection. The first launch starts the holder with a
+  `first.cmd` that starts the app and then the agent, so it costs no more
+  than a WinApps launch. The agent is read from
+  `~/.local/share/omarchohard/vm/agent.ps1` on each start, so an update
+  needs nothing installed in Windows. It accepts only Office apps, files
+  under `\\tsclient\home` or `\\tsclient\media`, and `ms-word:`,
+  `ms-excel:`, `ms-powerpoint:` and `onenote:` links. It exits after 15
+  minutes with no request and no Office window, and the holder then pauses
+  the VM after WinApps' `AUTOPAUSE_TIME`. `desktop_agent=off` in
+  `~/.config/omarchohard/config` goes back to WinApps for every launch.
+- **Warm apps.** Once Office is signed in, the agent starts Word, Excel and
+  PowerPoint hidden, so opening a file is a new window in an app that is
+  already running. They hold about 650 MB of the VM's memory. Set the list
+  with `desktop_warm=word,excel` in the config, or turn it off with
+  `desktop_warm=`.
+- **HiDPI.** Omarchy draws XWayland windows at the monitor's own pixels
+  (`xwayland:force_zero_scaling`), so Windows scales itself: the holder
+  passes the focused monitor's scale (`/scale-desktop:160` at 1.6) and keeps
+  `RDP_SCALE` in `winapps.conf` the same for WinApps launches.
 - The desktop tier adds an **Open in Windows** entry to Open With for those
   add-in types. It is hidden from the launcher, and uninstall removes it.
 - WinApps' own launchers pass the RDP password to FreeRDP on its command
@@ -189,9 +216,10 @@ in automatically. The script runs WinApps' setup, then recreates WinApps'
 `TimeSync` sign-in task and creates the `omarchohard-inbox` task through
 `conhost.exe --headless`, because Windows 11's default terminal ignores
 `-WindowStyle Hidden` and would show an "Administrator: powershell.exe"
-window. It installs Office, which writes `ready` to `office-status.json`,
-then turns automatic sign-in off (`AutoAdminLogon` = `0`) and signs out of
-the console. While the console session is open, a RemoteApp shows "Another
+window. It installs Office, which writes `installed` to
+`office-status.json`, then turns automatic sign-in off (`AutoAdminLogon` =
+`0`), writes `ready` and signs out of the console. When the VM stops before
+that, the inbox task finishes those steps on the next boot. While the console session is open, a RemoteApp shows "Another
 user is signed in" instead of the app, and WinApps' setup stops with
 "REMOTE DESKTOP PROTOCOL FAILURE" (exit 14). For a VM installed before this,
 sign out of Windows once at <http://127.0.0.1:8006> (Start, your name, Sign
@@ -199,11 +227,21 @@ out); `desktop wait` and `desktop apps` say so when WinApps exits 14.
 
 ### Measured
 
-Measured on one machine (2026-11-12: dockur 6.06, Windows 11 Enterprise
-evaluation, Microsoft 365 Apps, FreeRDP 3.33.1, Hyprland 0.57): a Word window
-appeared 1.8 s after launch on the first connection and 1.2 to 1.3 s after
-that; Excel took 1.2 s. The VM used 23.4 GB of disk and 3.5 GiB of memory. These are
-numbers from one machine, not a promise.
+Measured on one machine (Parish1, 2026-11-12: dockur 6.06, Windows 11
+Enterprise evaluation, Microsoft 365 Apps 16.0.20527, FreeRDP 3, Hyprland
+0.57), from the command to the window on screen:
+
+| Opening | WinApps, a connection each | Agent | Agent, app warm |
+| --- | --- | --- | --- |
+| Excel with a file, nothing running | 2.1 s | 2.0 to 2.2 s | |
+| Word with a file | 2.1 s | 1.2 to 1.3 s | 0.24 to 0.33 s |
+| PowerPoint with a file | 2.3 s | 1.0 to 1.5 s | 0.59 to 0.63 s |
+| Excel with a file | | | 0.78 s |
+| A new window of a running app | | 0.46 to 0.58 s | |
+| A window already open | | 0.03 s (focus) | |
+
+The VM used 17 GB of disk and 3.4 GiB of memory. These are numbers from one
+machine, not a promise.
 
 ## Updates
 

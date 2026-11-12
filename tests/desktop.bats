@@ -346,6 +346,9 @@ desktop_preferred() {
   printf 'RDP_USER="ada"\nRDP_PASS="pw"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
   : >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
   printf 'open_with=desktop\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  # WinApps for every launch here, even where FreeRDP is installed; the agent
+  # tests turn it back on.
+  printf 'desktop_agent=off\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
 }
 
 @test "with desktop Office preferred, open --app raises the app's window by its title, or starts it" {
@@ -414,6 +417,8 @@ JSON
 freerdp_stub() {
   # shellcheck disable=SC2016
   stub xfreerdp3 'for a in "$@"; do printf "%s\n" "$a"; done >"$HOME/rdp.args.tmp"; cat >"$HOME/rdp.stdin"; mv "$HOME/rdp.args.tmp" "$HOME/rdp.args"'
+  # These tests cover the explorer RemoteApp, used without the agent.
+  printf 'desktop_agent=off\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
 }
 
 @test "desktop run opens a file in Windows through explorer, with the password only on stdin" {
@@ -512,8 +517,12 @@ freerdp_stub() {
   printf '#!/bin/sh\nexit 0\n' >"$wa/setup.sh"
   chmod +x "$wa/setup.sh"
   desktop_preferred
+  winapps_launchers word-o365
   run "$OH" desktop apps
   [ "$status" -eq 0 ]
+  # WinApps' own entry goes through omarchohard, keeping its name and types.
+  grep -qx "Exec=$OH desktop open word %F" "$APPS/word-o365.desktop"
+  grep -qx 'Name=word-o365' "$APPS/word-o365.desktop"
   entry=$APPS/omarchohard-windows.desktop
   grep -qx 'Name=Open in Windows' "$entry"
   grep -qx "Exec=$OH desktop run %f" "$entry"
@@ -756,4 +765,125 @@ winapps_launchers() {
   run "$OH" desktop install --force
   [ "$status" -eq 0 ]
   [ ! -e "$INBOX/office-status.json" ]
+}
+
+agent_on() {
+  desktop_preferred
+  sed -i '/^desktop_agent=off$/d' "$XDG_CONFIG_HOME/omarchohard/config"
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'printf "%s\n" "$@" >"$HOME/rdp.args"; cat >"$HOME/rdp.stdin"'
+  # shellcheck disable=SC2016
+  stub docker 'case "$1" in inspect) echo running ;; esac; exit 0'
+  AGENT=$XDG_STATE_HOME/omarchohard/agent
+  mkdir -p "$AGENT" "$HOME/Documents"
+}
+
+# Stand in for agent.ps1: claim the first request by renaming it, and keep it.
+fake_agent() {
+  (
+    for _ in $(seq 100); do
+      for r in "$AGENT"/*.go; do
+        [ -f "$r" ] || continue
+        mv "$r" "$r.run" && cp "$r.run" "$BATS_TEST_TMPDIR/request" && rm -f "$r.run"
+        exit 0
+      done
+      sleep 0.1
+    done
+  ) 3>&- &
+}
+
+@test "with the agent up, opening a file is one request file: no new RDP connection, no WinApps" {
+  agent_on
+  printf '1\n' >"$AGENT/agent.beat"
+  : >"$HOME/Documents/Plan, 100%.docx"
+  fake_agent
+  run "$OH" open "$HOME/Documents/Plan, 100%.docx"
+  wait
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/request")" = "$(printf 'word\t%s' '\\tsclient\home\Documents\Plan, 100%.docx')" ]
+  [ ! -e "$HOME/rdp.args" ]
+  [ ! -e "$HOME/winapps.log" ]
+  [ -z "$(ls "$AGENT"/*.go 2>/dev/null)" ]
+}
+
+@test "a request the agent leaves is taken back, so it never runs twice" {
+  agent_on
+  printf '1\n' >"$AGENT/agent.beat"
+  # A holder that holds the lock but whose agent never answers.
+  exec {lk}>"$AGENT/holder.lock"
+  flock -n "$lk"
+  run "$OH" desktop open word
+  exec {lk}>&-
+  [ "$status" -eq 0 ]
+  [ -z "$(ls "$AGENT"/*.go 2>/dev/null)" ]
+  [ "$(cat "$HOME/winapps.log")" = word-o365 ]
+}
+
+@test "with no agent, the first open starts one hidden connection: password on stdin, app and agent in first.cmd, the monitor's scale" {
+  agent_on
+  # shellcheck disable=SC2016
+  stub hyprctl 'case "$1" in
+getoption) echo "{\"option\": \"xwayland:force_zero_scaling\", \"bool\": true, \"set\": true}" ;;
+monitors) echo "[{\"focused\":false,\"scale\":1.25},{\"focused\":true,\"scale\":1.6}]" ;;
+*) exit 1 ;;
+esac'
+  : >"$HOME/Documents/Budget 100%.xlsx"
+  run "$OH" desktop open excel "$HOME/Documents/Budget 100%.xlsx"
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/rdp.stdin" ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$HOME/rdp.stdin")" = pw ]
+  [ "$(grep -c pw "$HOME/rdp.args")" -eq 0 ]
+  grep -qx /from-stdin:force "$HOME/rdp.args"
+  grep -qx /scale-desktop:160 "$HOME/rdp.args"
+  grep -qx /scale-device:140 "$HOME/rdp.args"
+  grep -qx +home-drive "$HOME/rdp.args"
+  grep -qxF '/app:program:C:\Windows\System32\conhost.exe,name:omarchohard,cmd:--headless cmd.exe /c \\tsclient\home\.local\state\omarchohard\agent\first.cmd' "$HOME/rdp.args"
+  first=$AGENT/first.cmd
+  [ "$(sed -n 3p "$first")" = "$(printf 'start "" excel "%s"\r' '\\tsclient\home\Documents\Budget 100%%.xlsx')" ]
+  [ "$(sed -n 4p "$first")" = "$(printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s" -Warm "word,excel,powerpoint"\r' '\\tsclient\home\.local\share\omarchohard\vm\agent.ps1' '\\tsclient\home\.local\state\omarchohard\agent')" ]
+  cmp "$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1" "$XDG_DATA_HOME/omarchohard/vm/agent.ps1"
+  [ ! -e "$HOME/winapps.log" ]
+  # The holder lets go once FreeRDP ends.
+  for _ in $(seq 50); do
+    flock -n "$AGENT/holder.lock" true && break
+    sleep 0.1
+  done
+  flock -n "$AGENT/holder.lock" true
+}
+
+@test "desktop_agent=off, or a state folder outside home, keeps every launch on WinApps" {
+  agent_on
+  printf 'desktop_agent=off\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  run "$OH" desktop open powerpoint
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/winapps.log")" = powerpoint-o365 ]
+  sed -i '/^desktop_agent=off$/d' "$XDG_CONFIG_HOME/omarchohard/config"
+  XDG_STATE_HOME=$BATS_TEST_TMPDIR/state run "$OH" desktop open onenote
+  [ "$status" -eq 0 ]
+  [ "$(tail -n1 "$HOME/winapps.log")" = onenote-o365 ]
+  [ ! -e "$HOME/rdp.args" ]
+}
+
+@test "the agent takes only host paths and Office links, and warms apps only once Office is signed in" {
+  local ps=$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1
+  grep -qF "if (\$Path -notmatch '^\\\\\\\\tsclient\\\\(home|media)\\\\' -or (\$Path -split '\\\\') -contains '..') {" "$ps"
+  grep -qF "if (\$arg -notmatch '^(ms-(word|excel|powerpoint)|onenote):') { throw \"refused link: \$arg\" }" "$ps"
+  grep -qF "[IO.File]::Move(\$f, \"\$f.run\")" "$ps"
+  grep -qF "if (-not \$Warm -or -not (Test-OfficeSignedIn)) { return }" "$ps"
+  grep -qF "New-Object Threading.Mutex(\$true, 'Local\\omarchohard-agent', [ref]\$created)" "$ps"
+}
+
+@test "a cold desktop run opens the file through explorer, so a .bat window closes when it ends" {
+  agent_on
+  : >"$HOME/Documents/fix it.bat"
+  run "$OH" desktop run "$HOME/Documents/fix it.bat"
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 3p "$AGENT/first.cmd")" = "$(printf 'explorer.exe "%s"\r' '\\tsclient\home\Documents\fix it.bat')" ]
+  for _ in $(seq 50); do
+    flock -n "$AGENT/holder.lock" true && break
+    sleep 0.1
+  done
 }

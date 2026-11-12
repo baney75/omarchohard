@@ -10,6 +10,19 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Added
 
+- Desktop Office opens through a warm agent: one hidden RDP connection
+  stays open and a PowerShell agent in the Windows session starts each app
+  from a request file, with no new connection per launch. A Word file opens
+  in 1.2 s instead of 2.1 s, and in 0.24 to 0.33 s once the agent keeps
+  Word, Excel and PowerPoint warm (after Office is signed in). Paths with
+  commas open now. `desktop_agent=off` and `desktop_warm=` in the config
+  turn each off.
+- `omarchohard desktop open APP [FILE...]` opens desktop Office whatever
+  `open_with` says. WinApps' own launcher entries now point at it.
+- Desktop Office draws at the monitor's scale (`/scale-desktop:160` on a 1.6
+  screen) instead of a fixed 100, which drew it at about 60 percent size on
+  HiDPI screens.
+
 - Setup asks which Office you want: desktop Office (the real Windows apps in
   a Windows VM) or the web apps, and recommends desktop Office only when
   `desktop check` passes. `setup --tier desktop|web` for scripts; `--yes`
