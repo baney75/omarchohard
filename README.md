@@ -42,9 +42,10 @@ no longer officially supports Office
 A VM costs memory and disk, and in return Office behaves as it does on a
 Windows PC.
 
-Desktop Office is experimental: an end-to-end run is in progress and it is
-untested live. See [Desktop Office](#desktop-office) and
-[docs/desktop-tier.md](docs/desktop-tier.md).
+Desktop Office is experimental: an end-to-end run is in progress. Word and
+Excel have opened as their own windows on one machine; the full install from
+`omarchohard setup` is untested live. See [Desktop Office](#desktop-office)
+and [docs/desktop-tier.md](docs/desktop-tier.md).
 
 ## The web apps
 
@@ -267,7 +268,11 @@ omarchohard share --link --edit Budget.xlsx # an edit link
 
 ## Sign-in
 
-- Every app uses single sign-on (SSO) in your default browser profile. Sign in
+- **Desktop Office** signs in once, in Office's own window: an unlicensed
+  Microsoft 365 opens "Sign in to get started" with Microsoft's sign-in
+  inside Office. It works like any other window.
+- **The web apps** sign in through your default browser. Every app uses single
+  sign-on (SSO) in your default browser profile. Sign in
   once with `omarchohard login` (or in any app window) and every app is signed
   in. School and work accounts go through their own sign-in page.
 - `omarchohard login --email you@school.edu` fills in the address for you.
@@ -325,8 +330,9 @@ browser is open, launches are already warm.
 
 ## Desktop Office
 
-Experimental: an end-to-end run is in progress, and none of this is tested
-live yet.
+Experimental: an end-to-end run is in progress. Word and Excel have opened as
+RemoteApp windows on one machine; the full install from `omarchohard setup`
+is untested live.
 
 ```sh
 omarchohard desktop check            # KVM, Docker or Podman, FreeRDP 3, memory, disk
@@ -342,7 +348,10 @@ omarchohard desktop update           # update Office and Windows now
   Office files to them. Ctrl-C stops only the watching; `omarchohard desktop
   wait` picks it up again.
 - **Windows.** Each app opens in its own window, and opening it again raises
-  that window. Teams stays a web app.
+  that window, found by its title. On Omarchy's Lua Hyprland config,
+  omarchohard adds a few window rules (`~/.config/hypr/omarchohard.lua`, loaded
+  by one line in `hyprland.lua`): documents stay opaque, and the hidden
+  RemoteApp marker window stays out of sight. Teams stays a web app.
 - **Add-ins and macros** work as on Windows. `desktop run` opens any file
   under your home folder or `/run/media` with its Windows program, so an
   `.xll`, `.xlam`, `.ppam`, `.dotm` or `.vsto` add-in installs into Office.
@@ -350,8 +359,9 @@ omarchohard desktop update           # update Office and Windows now
   asks for an update now and starts a Windows Update scan;
   `--channel current|monthly|semi-annual` and `--to VERSION` choose what to
   update to. `omarchohard doctor` shows the Office version and channel.
-- **Sign-in.** Microsoft 365 activates when you sign in inside Word. Until
-  then Office opens in reduced functionality mode: you can view and print,
+- **Sign-in.** Microsoft 365 activates when you sign in once in Office's own
+  sign-in window ("Sign in to get started with Word"). Until then Office
+  opens in reduced functionality mode: you can view and print,
   not edit. A bought Office 2021 or 2024 key goes in with
   `omarchohard desktop activate`, and a Windows key with
   `omarchohard desktop activate --windows`. Keys are read from a hidden
@@ -359,7 +369,14 @@ omarchohard desktop update           # update Office and Windows now
   the free 90-day evaluation; `--windows 11` uses your own license.
 
 It needs KVM, Docker or Podman, FreeRDP 3, at least 16 GiB of RAM (6 GiB free
-when you start it) and about 80 GB of disk. The Windows VM can read your whole
+when you start it) and about 80 GB of disk.
+
+Measured on one machine (2026-11-12: dockur 6.06, Windows 11 Enterprise
+evaluation, Microsoft 365 Apps, FreeRDP 3.33.1, Hyprland 0.57): a Word window
+appeared 1.8 s after launch on the first connection and 1.2 to 1.3 s after
+that; Excel took 1.2 s. The VM used 23.4 GB of disk and 3.5 GiB of memory.
+
+ The Windows VM can read your whole
 home folder; read the warning in [docs/desktop-tier.md](docs/desktop-tier.md)
 first.
 
@@ -385,7 +402,7 @@ Firefox and wrong accounts, see [docs/troubleshooting.md](docs/troubleshooting.m
 **Verified** (checks that could fail and passed, in a clean Arch Linux
 container; see `make lint test container`):
 
-- 121 bats tests: install twice is idempotent; doctor passes after install and
+- 127 bats tests: install twice is idempotent; doctor passes after install and
   fails on a removed launcher, a removed icon, a reassigned handler and a
   non-executable Exec path; `xdg-open` sends the `.docx`, `.xlsx` and `.pptx`
   fixtures to Word, Excel and PowerPoint; `mailto`, `msteams` and `ms-word`
@@ -400,7 +417,9 @@ container; see `make lint test container`):
   read from the VM log and `office-status.json`, `install --wait` through
   Ctrl-C, launch-or-focus by window class, `desktop run` path checks with
   the password on stdin and never on the command line, the update allowlists,
-  and the doctor rows.
+  the doctor rows, the first-boot script (hidden task windows, the console
+  signed out after Office), the Hyprland rules added and removed by one line,
+  and Kerberos off for the VM connection.
 - The one-line installer over HTTP for stable, nightly and dev, then install,
   doctor, file handler defaults, switching between all three channels, and
   uninstall.
@@ -416,8 +435,9 @@ account, an in-place edit round trip, a real share link, the setup window from
 the launcher, the Files scripts in Nautilus, Teams calls, screen sharing and
 notifications, launch-or-focus under
 Hyprland, the prewarm service under systemd, and desktop Office end to end
-(a real Windows and Office install, FreeRDP 3 reading the password from
-stdin, the PowerShell scripts in the VM). The
+from `omarchohard setup` (the first-boot script's sign-out and hidden task
+windows, FreeRDP 3 reading the password from stdin, the Hyprland rules in a
+live session, the PowerShell scripts in the VM). The
 launch times above were measured by hand on that laptop.
 
 ## License and trademarks

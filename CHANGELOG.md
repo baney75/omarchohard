@@ -31,6 +31,10 @@ builds are not listed; they carry the version of the next release plus a
   `omarchohard update` points to it.
 - `omarchohard doctor` checks the VM, the install phase, RDP, the Office
   version and channel, the WinApps launchers and `open_with`.
+- Hyprland window rules for desktop Office in `~/.config/hypr/omarchohard.lua`,
+  loaded by one guarded line in `hyprland.lua` that uninstall removes:
+  documents are opaque and the RemoteApp marker window is hidden. Doctor
+  warns when Hyprland uses `hyprland.conf`.
 
 ### Changed
 
@@ -40,6 +44,16 @@ builds are not listed; they carry the version of the next release plus a
 - The dockur/windows image is pinned to `6.06` instead of `latest`.
 - Office in the VM installs with updates on, on the chosen channel, and the
   install fails loudly when Office's installer does.
+- The first boot of the VM signs out of the Windows console after Office
+  installs and turns automatic sign-in off, so RemoteApp no longer shows
+  "Another user is signed in". When WinApps cannot connect, `desktop wait`
+  and `desktop apps` say to sign out once.
+- WinApps' TimeSync task and the inbox task run through
+  `conhost.exe --headless`, with no window at sign-in.
+- Launch-or-focus finds desktop Office windows by title, as FreeRDP gives
+  all windows of the session the class of its newest connection.
+- WinApps, its setup and FreeRDP run with `KRB5_CONFIG=/dev/null`, skipping a
+  failing Kerberos attempt on each connection.
 - The README leads with desktop Office and keeps the web apps as the light
   option.
 

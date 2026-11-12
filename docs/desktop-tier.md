@@ -2,7 +2,8 @@
 
 **Status: experimental and untested.** Every command below exists and is
 linted and tested against stub Docker and FreeRDP, but the tier has not been
-run end to end. End-to-end run in progress. On the test laptop,
+run end to end. End-to-end run in progress: on one machine, Word and Excel
+opened as RemoteApp windows (see [Measured](#measured)). On the test laptop,
 it was not run because the machine had about 7 GiB free of 31 GiB with 25 GiB
 of swap in use; the preflight refuses below 6 GiB free. Expect rough edges,
 and keep anything you care about in OneDrive.
@@ -142,9 +143,30 @@ and a new install bring the new scripts.
 ## Using desktop Office
 
 - `omarchohard open --app word` (and `excel`, `powerpoint`, `outlook`,
-  `onenote`) raises the open window of that app, found by its window class
-  (`Microsoft Word` and so on) through `hyprctl`, or starts it through
-  WinApps. With a file it always opens the file. Teams stays a web app.
+  `onenote`) raises the open window of that app through `hyprctl`, or starts
+  it through WinApps. With a file it always opens the file. Teams stays a web
+  app. Windows are found by title (`Report.docx - Word`, or `Microsoft Word`
+  with no document; Outlook and OneNote titles end in `Outlook` and
+  `OneNote`), not by class: each new RemoteApp connection gives every window
+  of the Windows session its own class, so after Excel opens, Word's window
+  has the class `Microsoft Excel` too.
+- **Hyprland rules.** With Omarchy's Lua config, adding the apps writes
+  `~/.config/hypr/omarchohard.lua` and appends one line to
+  `~/.config/hypr/hyprland.lua`:
+  `pcall(dofile, os.getenv("HOME") .. "/.config/hypr/omarchohard.lua") -- omarchohard`.
+  The rules keep Office windows opaque (`tag = "-default-opacity"`,
+  `opacity = "1 1"`) and send the `RemoteApp Marker Window` to the hidden
+  workspace `special:omarchohard` without focus. No other line changes, and
+  uninstall and `desktop remove` take out exactly that line and the file. With
+  the older `hyprland.conf`, nothing is written and doctor warns.
+- **Sign-in.** Desktop Office signs in once in Office's own window: an
+  unlicensed Microsoft 365 opens "Sign in to get started with Word", with
+  Microsoft's sign-in inside Office. The web apps sign in through your
+  default browser.
+- omarchohard starts WinApps, its setup and FreeRDP with `KRB5_CONFIG=/dev/null`
+  in their environment only. FreeRDP otherwise tries Kerberos first with
+  Arch's example `/etc/krb5.conf`, which fails, costs about 0.1 s and prints
+  errors, before it falls back to NTLM.
 - `omarchohard desktop run FILE` opens any file in Windows with the program
   Windows picks: an add-in (`.xll`, `.xlam`, `.ppam`, `.dotm`, `.vsto`), an
   installer or a document. It runs `explorer.exe` as a RemoteApp on the file's
@@ -159,6 +181,29 @@ and a new install bring the new scripts.
   line (`/p:`), where other processes of your user can read it. That is
   WinApps' code, pinned at `0b950dc`, not omarchohard's. WinApps' setup also
   updates its own copy from git, so it may run a newer WinApps than the pin.
+
+### First boot
+
+After Windows Setup, dockur runs `C:\OEM\install.bat` in the session it signs
+in automatically. The script runs WinApps' setup, then recreates WinApps'
+`TimeSync` sign-in task and creates the `omarchohard-inbox` task through
+`conhost.exe --headless`, because Windows 11's default terminal ignores
+`-WindowStyle Hidden` and would show an "Administrator: powershell.exe"
+window. It installs Office, which writes `ready` to `office-status.json`,
+then turns automatic sign-in off (`AutoAdminLogon` = `0`) and signs out of
+the console. While the console session is open, a RemoteApp shows "Another
+user is signed in" instead of the app, and WinApps' setup stops with
+"REMOTE DESKTOP PROTOCOL FAILURE" (exit 14). For a VM installed before this,
+sign out of Windows once at <http://127.0.0.1:8006> (Start, your name, Sign
+out); `desktop wait` and `desktop apps` say so when WinApps exits 14.
+
+### Measured
+
+Measured on one machine (2026-11-12: dockur 6.06, Windows 11 Enterprise
+evaluation, Microsoft 365 Apps, FreeRDP 3.33.1, Hyprland 0.57): a Word window
+appeared 1.8 s after launch on the first connection and 1.2 to 1.3 s after
+that; Excel took 1.2 s. The VM used 23.4 GB of disk and 3.5 GiB of memory. These are
+numbers from one machine, not a promise.
 
 ## Updates
 
