@@ -247,13 +247,35 @@ EOF
   oh_ok "OneDrive is at $dir"
 }
 
+# Whether OneDrive still runs. The unit answers only while the user manager
+# does, so the mount and the processes are checked too.
+oh_onedrive_running() {
+  local dir
+  systemctl --user is-active --quiet "$OH_ONEDRIVE_UNIT" 2>/dev/null && return 0
+  dir=$(oh_config_get onedrive_dir)
+  [[ -n $dir ]] && mountpoint -q -- "$dir" 2>/dev/null && return 0
+  # The rclone mount's control socket is named for omarchohard.
+  pgrep -u "$UID" -f 'omarchohard-rclone\.sock' >/dev/null 2>&1 && return 0
+  [[ $(oh_config_get onedrive_client) == abraunegg ]] &&
+    pgrep -u "$UID" -x onedrive >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# Stop OneDrive, or stop here: removing its unit or settings under a running
+# sync or mount leaves it with nothing to stop it.
+oh_onedrive_stop_or_die() {
+  systemctl --user disable --now "$OH_ONEDRIVE_UNIT" >/dev/null 2>&1 || true
+  if oh_onedrive_running; then
+    oh_die "OneDrive is still running, so nothing was removed. Stop it (systemctl --user stop $OH_ONEDRIVE_UNIT, or end the rclone or onedrive process, then fusermount3 -u $(oh_config_get onedrive_dir) if it stays mounted) and try again."
+  fi
+}
+
 oh_onedrive_remove() {
   local quiet=0 remote
   [[ ${1:-} == --quiet ]] && quiet=1
   remote=$(oh_config_get onedrive_remote)
   # Tried even without a unit file: 0.1.0's uninstall deleted it under a running service.
-  systemctl --user disable --now "$OH_ONEDRIVE_UNIT" >/dev/null 2>&1 ||
-    [[ ! -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT ]] || oh_warn "could not stop $OH_ONEDRIVE_UNIT"
+  oh_onedrive_stop_or_die
   rm -f "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   if [[ -f $OH_STATE_DIR/rclone-remote-created ]] && oh_have rclone; then

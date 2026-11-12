@@ -205,6 +205,35 @@ case " $* " in *" is-active "*) exit 3 ;; esac'
   grep -qx 'onedrive_client=rclone' "$XDG_CONFIG_HOME/omarchohard/config"
 }
 
+@test "uninstall --purge deletes nothing when OneDrive will not stop" {
+  oh_install_quiet
+  onedrive_stubbed
+  # shellcheck disable=SC2016
+  stub systemctl 'printf "%s\n" "$*" >>"$HOME/systemctl.log"; case " $* " in *" disable "*) exit 1 ;; esac; exit 0'
+  run "$OH" uninstall --purge
+  [ "$status" -ne 0 ]
+  [[ $output == *"still running"* ]]
+  [ -e "$HOME/$UNIT_REL" ]
+  run grep -q 'config delete' "$HOME/rclone.log"
+  [ "$status" -ne 0 ]
+  grep -qx 'onedrive_client=rclone' "$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+@test "uninstall sees an abraunegg sync still running when the user manager is down" {
+  oh_install_quiet
+  printf 'onedrive_client=abraunegg\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  mkdir -p "$HOME/.config/systemd/user"
+  : >"$HOME/$UNIT_REL"
+  stub systemctl 'echo "Failed to connect to bus" >&2; exit 1'
+  # shellcheck disable=SC2016
+  stub pgrep 'case "$*" in *"-x onedrive"*) exit 0 ;; esac; exit 1'
+  run "$OH" uninstall
+  [ "$status" -ne 0 ]
+  [[ $output == *"still running"* ]]
+  [ -e "$HOME/$UNIT_REL" ]
+  [ -e "$XDG_DATA_HOME/applications/omarchohard-word.desktop" ]
+}
+
 @test "uninstall keeps the abraunegg config on record so a later --purge removes it" {
   oh_install_quiet
   conf=$XDG_CONFIG_HOME/onedrive/config

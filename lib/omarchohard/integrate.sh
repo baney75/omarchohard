@@ -276,24 +276,18 @@ oh_install() {
 
 oh_uninstall() {
   oh_config_load
-  local purge=0 path abraunegg_conf kept="" dir
+  local purge=0 path abraunegg_conf kept=""
   [[ ${1:-} == --purge ]] && purge=1
   abraunegg_conf=${XDG_CONFIG_HOME:-$HOME/.config}/onedrive/config
   # Stop the services before their unit files go, or they keep running.
   oh_prewarm off >/dev/null 2>&1 || true
+  # Before anything is removed, plain or --purge.
+  oh_onedrive_stop_or_die
   if ((purge)); then
     oh_onedrive remove --quiet || oh_warn "OneDrive was not fully removed; check: omarchohard onedrive status"
-  elif [[ -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT || -n $(oh_config_get onedrive_client) ]]; then
-    systemctl --user disable --now "$OH_ONEDRIVE_UNIT" >/dev/null 2>&1 || true
+  elif [[ -n $(oh_config_get onedrive_client) ]]; then
+    oh_config_set onedrive_client ""
   fi
-  # Remove nothing while OneDrive still runs: its unit file would go and leave
-  # the sync or mount running with nothing to stop it.
-  dir=$(oh_config_get onedrive_dir)
-  if systemctl --user is-active --quiet "$OH_ONEDRIVE_UNIT" 2>/dev/null ||
-    { [[ -n $dir ]] && mountpoint -q -- "$dir" 2>/dev/null; }; then
-    oh_die "OneDrive is still running, so nothing was removed. Stop it (systemctl --user stop $OH_ONEDRIVE_UNIT; fusermount3 -u $dir if it stays mounted), then run uninstall again."
-  fi
-  ((purge)) || [[ -z $(oh_config_get onedrive_client) ]] || oh_config_set onedrive_client ""
   if [[ -f $OH_MANIFEST ]]; then
     while IFS= read -r path; do
       # The abraunegg config stays unless --purge, like the rclone remote, and
