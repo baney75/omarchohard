@@ -84,8 +84,8 @@ onedrive_rclone() {
 @test "setup reads plain answers when gum is missing" {
   export OMARCHOHARD_NO_GUM=1
   answers=$BATS_TEST_TMPDIR/answers
-  # web apps, browser 1, own profile, no email, apps 3 and 6 (PowerPoint, Teams), mailto yes, no sign-in, OneDrive not now, no prewarm, no Word
-  printf '1\n1\n2\n\n3 6\ny\nn\n3\nn\nn\n' >"$answers"
+  # web apps, browser 1, own profile, no email, apps 3 and 6 (PowerPoint, Teams), Microsoft files only, mailto yes, no sign-in, OneDrive not now, no prewarm, no Word
+  printf '1\n1\n2\n\n3 6\n\ny\nn\n3\nn\nn\n' >"$answers"
   OMARCHOHARD_TTY=$answers run "$OH" setup
   [ "$status" -eq 0 ]
   [ -f "$APPS/omarchohard-powerpoint.desktop" ]
@@ -349,14 +349,14 @@ signer_ok() {
 
 @test "interactive setup explains both tiers and recommends the web apps with the reason" {
   answers=$BATS_TEST_TMPDIR/answers
-  printf '1\n1\n2\n\n\ny\nn\n3\nn\nn\n' >"$answers"
+  printf '1\n1\n2\n\n\n\ny\nn\n3\nn\nn\n' >"$answers"
   OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
   [ "$status" -eq 0 ]
   [[ $output == *"Desktop Office is not recommended here: "*"FreeRDP 3 is missing"* ]]
   [[ $output == *"1) Web apps: open instantly and stay light (recommended)"* ]]
   [[ $output == *"2) Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"* ]]
   # Choosing desktop anyway runs its install at the end.
-  printf '2\n1\n2\n\n\ny\nn\n3\nn\nn\n' >"$answers"
+  printf '2\n1\n2\n\n\n\ny\nn\n3\nn\nn\n' >"$answers"
   OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
   [ "$status" -eq 1 ]
   [[ $output == *"Checking this machine for the desktop tier"* ]]
@@ -367,4 +367,150 @@ signer_ok() {
   [ "$status" -eq 0 ]
   jq -e '.recommend.tier.value == "web" and (.recommend.tier.why | test("FreeRDP 3"))' <<<"$output"
   jq -e '.config.open_with == "web" and .desktop_installed == false' <<<"$output"
+}
+
+declare -gA MS_TYPES
+MS_TYPES[word]='application/msword application/msword-template application/vnd.openxmlformats-officedocument.wordprocessingml.document application/vnd.ms-word.document.macroEnabled.12 application/vnd.openxmlformats-officedocument.wordprocessingml.template application/vnd.ms-word.template.macroEnabled.12'
+MS_TYPES[excel]='application/vnd.ms-excel application/vnd.openxmlformats-officedocument.spreadsheetml.sheet application/vnd.ms-excel.sheet.macroEnabled.12 application/vnd.ms-excel.sheet.binary.macroEnabled.12 application/vnd.openxmlformats-officedocument.spreadsheetml.template application/vnd.ms-excel.template.macroEnabled.12'
+MS_TYPES[powerpoint]='application/vnd.ms-powerpoint application/vnd.openxmlformats-officedocument.presentationml.presentation application/vnd.ms-powerpoint.presentation.macroEnabled.12 application/vnd.openxmlformats-officedocument.presentationml.slideshow application/vnd.ms-powerpoint.slideshow.macroEnabled.12 application/vnd.openxmlformats-officedocument.presentationml.template application/vnd.ms-powerpoint.template.macroEnabled.12'
+ODT=application/vnd.oasis.opendocument.text
+ODS=application/vnd.oasis.opendocument.spreadsheet
+ODP=application/vnd.oasis.opendocument.presentation
+
+# other_defaults: the handler of odt, ods, odp, rtf and csv, one per line.
+other_defaults() {
+  local m
+  for m in "$ODT" "$ODS" "$ODP" application/rtf text/csv; do echo "$m=$(mime_default "$m")"; done
+}
+
+@test "a default install opens every Microsoft format in Office and leaves other formats alone" {
+  oh_install_quiet
+  n=0
+  for app in word excel powerpoint; do
+    for m in ${MS_TYPES[$app]}; do
+      n=$((n + 1))
+      [ "$(mime_default "$m")" = "omarchohard-$app.desktop" ] || {
+        echo "$m: $(mime_default "$m")"
+        false
+      }
+    done
+  done
+  [ "$n" -eq 19 ]
+  run other_defaults
+  [[ $output != *omarchohard* ]]
+  run grep -l -e opendocument -e rtf -e text/csv "$APPS"/omarchohard-*.desktop
+  [ "$status" -ne 0 ]
+  run "$OH" doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "files all claims every other format for its app; files odt,csv claims just those two" {
+  oh_install_quiet
+  run "$OH" files all
+  [ "$status" -eq 0 ]
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+  [ "$(mime_default application/rtf)" = omarchohard-word.desktop ]
+  [ "$(mime_default "$ODS")" = omarchohard-excel.desktop ]
+  [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
+  [ "$(mime_default "$ODP")" = omarchohard-powerpoint.desktop ]
+  grep -qx 'files=all' "$XDG_CONFIG_HOME/omarchohard/config"
+  run "$OH" doctor
+  [ "$status" -eq 0 ]
+
+  run "$OH" files ODT,.csv
+  [ "$status" -eq 0 ]
+  grep -qx 'files=odt,csv' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+  [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
+  [ "$(mime_default "$ODS")" != omarchohard-excel.desktop ]
+  [ "$(mime_default "$ODP")" != omarchohard-powerpoint.desktop ]
+  [ "$(mime_default application/rtf)" != omarchohard-word.desktop ]
+  run "$OH" files
+  [ "$output" = "files: odt,csv (Microsoft Office files, .odt, .csv)" ]
+  # Every other format named is "all"; none is "microsoft".
+  "$OH" files odp,csv,rtf,ods,odt >/dev/null 2>&1
+  grep -qx 'files=all' "$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+@test "files microsoft after all gives .odt back to the handler it had before" {
+  dummy_app libreoffice-writer
+  xdg-mime default libreoffice-writer.desktop "$ODT"
+  printf 'files=all\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  oh_install_quiet
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+  grep -q "$ODT" "$APPS/omarchohard-word.desktop"
+  run "$OH" files microsoft
+  [ "$status" -eq 0 ]
+  [ "$(mime_default "$ODT")" = libreoffice-writer.desktop ]
+  run grep -q "$ODT" "$APPS/omarchohard-word.desktop"
+  [ "$status" -ne 0 ]
+  [ "$(mime_default application/vnd.ms-word.template.macroEnabled.12)" = omarchohard-word.desktop ]
+  run "$OH" doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "files and setup --files refuse an unknown value" {
+  run "$OH" files bogus
+  [ "$status" -ne 0 ]
+  [[ $output == *"unknown files value 'bogus'"*"microsoft, all"*"odt, ods, odp, rtf, csv"* ]]
+  run "$OH" files odt,docx
+  [ "$status" -ne 0 ]
+  run "$OH" setup --yes --browser chromium --files bogus --onedrive none
+  [ "$status" -ne 0 ]
+  [[ $output == *"unknown files value 'bogus'"* ]]
+  [ ! -e "$APPS/omarchohard-word.desktop" ]
+  run grep -q '^files=' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$status" -ne 0 ]
+}
+
+@test "setup --yes --files all opens other formats in Office; --yes alone keeps the choice" {
+  run "$OH" setup --yes --browser chromium --isolated --files all --onedrive none --prewarm off
+  [ "$status" -eq 0 ]
+  [[ $output == *"files: Microsoft Office files, .odt, .ods, .odp, .rtf, .csv"* ]]
+  grep -qx 'files=all' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+  run "$OH" setup --yes --browser chromium --onedrive none --prewarm off
+  [ "$status" -eq 0 ]
+  grep -qx 'files=all' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+}
+
+@test "interactive setup asks which files open in Office and takes two other formats" {
+  answers=$BATS_TEST_TMPDIR/answers
+  # web apps, browser 1, own profile, no email, all apps, other formats too, .odt and .csv, mailto yes, no sign-in, OneDrive not now, no prewarm, no Word
+  printf '1\n1\n2\n\n\n2\n1 5\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 0 ]
+  [[ $output == *"1) Microsoft Office files only (.docx, .xlsx, .pptx and their older, macro and template forms)"* ]]
+  [[ $output == *"5) .csv  Comma-separated values"* ]]
+  [[ $output == *"files: Microsoft Office files, .odt, .csv"* ]]
+  grep -qx 'files=odt,csv' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+  [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
+  [ "$(mime_default "$ODS")" != omarchohard-excel.desktop ]
+  # A rerun lists other formats first, so Enter does not drop them.
+  printf '1\n1\n2\n\n\n\n\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 0 ]
+  [[ $output == *"1) Microsoft Office files and other formats too"* ]]
+  grep -qx 'files=all' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+}
+
+@test "interactive setup offers only the formats of the apps picked, and skips the question without them" {
+  answers=$BATS_TEST_TMPDIR/answers
+  # apps 2 (Excel): the other formats are .ods and .csv; pick 2 (.csv)
+  printf '1\n1\n2\n\n2\n2\n2\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 0 ]
+  [[ $output == *"1) .ods  OpenDocument spreadsheet"*"2) .csv  Comma-separated values"* ]]
+  [[ $output != *".odt  OpenDocument text"* ]]
+  grep -qx 'files=csv' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
+  # apps 6 (Teams) only: no files question, the next answer goes to mailto.
+  printf '1\n1\n2\n\n6\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 0 ]
+  [[ $output != *"Which files should open in Office?"* ]]
+  grep -qx 'files=csv' "$XDG_CONFIG_HOME/omarchohard/config"
 }

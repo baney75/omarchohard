@@ -89,6 +89,7 @@ oh_config_load() {
     [desktop_warm]="word,excel,powerpoint"
     [onedrive_cache_size]=20G
     [apps]=all
+    [files]=microsoft
   )
   [[ -f $OH_CONFIG ]] || return 0
   local key value

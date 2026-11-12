@@ -22,8 +22,8 @@ Usage: omarchohard <command> [options]
 Start here
   setup                  Guided setup: Office tier, browser, sign-in, OneDrive, check.
                          Agents: setup --yes [--tier desktop|web] [--browser B] [--shared|--isolated]
-                         [--email E] [--no-mail] [--apps LIST] [--onedrive rclone|abraunegg|none]
-                         [--prewarm on|off] [--optimize]
+                         [--email E] [--no-mail] [--apps LIST] [--files microsoft|all|LIST]
+                         [--onedrive rclone|abraunegg|none] [--prewarm on|off] [--optimize]
 
 Everyday
   install [--isolated] [--no-mail] [--prewarm] [--apps word,excel,teams|all]
@@ -37,6 +37,9 @@ Everyday
   share [--link] FILE    Share through OneDrive (also in Files: right-click, Scripts)
   add APP... | remove APP...
                          Choose which apps are installed (teams, onenote, ...)
+  files [microsoft|all|LIST]
+                         Which files open in Office: Microsoft formats only
+                         (default), all, or Microsoft plus odt,ods,odp,rtf,csv
   addins [APP]           Find Office Add-ins (they work in the web apps)
   uninstall [--purge]    Remove everything install added and restore handlers
 
@@ -76,6 +79,7 @@ main() {
   share) oh_share "$@" ;;
   add) oh_apps_change add "$@" ;;
   remove) oh_apps_change remove "$@" ;;
+  files) oh_files "$@" ;;
   install) oh_install "$@" ;;
   uninstall) oh_uninstall "$@" ;;
   login) oh_login "$@" ;;

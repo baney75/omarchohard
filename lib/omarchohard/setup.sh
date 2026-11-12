@@ -221,10 +221,42 @@ oh_setup_tier() {
   if [[ $choice == Desktop* ]]; then echo desktop; else echo web; fi
 }
 
+# Which files open in Office: prints a `files` value. Only formats of enabled
+# apps are offered; with no Word, Excel or PowerPoint, or no terminal, the
+# current value stays.
+oh_setup_files() {
+  local ext choice label want=''
+  local -a offer=() picked=()
+  local -A name=([odt]="OpenDocument text" [ods]="OpenDocument spreadsheet"
+    [odp]="OpenDocument presentation" [rtf]="Rich Text" [csv]="Comma-separated values")
+  for ext in $OH_FILES_OTHER; do
+    oh_app_enabled "${OH_EXT_APP[$ext]}" && offer+=(".$ext  ${name[$ext]}")
+  done
+  if ! oh_ui_interactive || ((${#offer[@]} == 0)); then
+    oh_config_get files
+    return 0
+  fi
+  local -a opts=("Microsoft Office files only (.docx, .xlsx, .pptx and their older, macro and template forms)"
+    "Microsoft Office files and other formats too")
+  # The current choice is the default, so Enter on a rerun keeps it.
+  [[ $(oh_config_get files) == microsoft ]] || opts=("${opts[1]}" "${opts[0]}")
+  choice=$(oh_ui_choose "Which files should open in Office?" "${opts[@]}") || return 1
+  if [[ $choice == *only* ]]; then
+    echo microsoft
+    return 0
+  fi
+  mapfile -t picked < <(oh_ui_pick "Which other formats? (space toggles, Enter confirms)" "${offer[@]}")
+  for label in "${picked[@]}"; do
+    label=${label#.}
+    want+=${want:+,}${label%% *}
+  done
+  oh_files_parse "$want"
+}
+
 oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
   local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer tier='' desktop_failed=0
-  local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' optimize=0
+  local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' want_files='' optimize=0
   local -a browsers labels
   while (($#)); do
     case $1 in
@@ -242,6 +274,10 @@ oh_setup() {
     --tier) tier=${2:?--tier needs desktop or web} && shift ;;
     --apps)
       want_apps=$(oh_apps_parse "${2:?--apps needs a list, like word,excel,teams or all}") || exit 1
+      shift
+      ;;
+    --files)
+      want_files=$(oh_files_parse "${2:?--files needs microsoft, all or a list, like odt,csv}") || exit 1
       shift
       ;;
     *) oh_die "unknown setup option: $1 (see: omarchohard help setup)" ;;
@@ -351,6 +387,9 @@ oh_setup() {
     [[ -n $want_apps ]] || want_apps=all
   fi
   oh_config_set apps "$want_apps"
+  [[ -n $want_files ]] || want_files=$(oh_setup_files) || oh_die "setup cancelled"
+  oh_config_set files "$want_files"
+  oh_ok "files: $(oh_files_label)"
   if [[ $want_mail == 0 ]]; then
     mail_flag=(--no-mail)
   else

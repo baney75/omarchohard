@@ -33,12 +33,13 @@ oh_icon_install() {
 }
 
 oh_desktop_entry_write() {
-  local id=$1 bin=$2 file name mimes schemes mime_line='' scheme wmclass
+  local id=$1 bin=$2 file name schemes mime_line='' scheme wmclass
+  local -a mimes
   file=$OH_APPS_DIR/$(oh_app_desktop_id "$id")
   name=$(oh_app_name "$id")
-  mimes=$(oh_app_mimes "$id")
+  mapfile -t mimes < <(oh_app_file_mimes "$id")
   schemes=$(oh_app_schemes "$id")
-  [[ -n $mimes ]] && mime_line+="$mimes;"
+  ((${#mimes[@]})) && mime_line+=$(printf '%s;' "${mimes[@]}")
   for scheme in ${schemes//;/ }; do
     # With mail=0 Outlook does not offer itself for mailto at all.
     [[ $scheme == mailto && $(oh_config_get mail) == 0 ]] && continue
@@ -190,6 +191,21 @@ oh_apps_change() {
   oh_install --apps "$new"
 }
 
+# omarchohard files [microsoft|all|LIST]: which files open in Office.
+oh_files() {
+  oh_config_load
+  local want
+  if (($# == 0)); then
+    printf 'files: %s (%s)\n' "$(oh_config_get files)" "$(oh_files_label)"
+    return 0
+  fi
+  (($# == 1)) || oh_die "usage: omarchohard files [microsoft|all|LIST]   (LIST: ${OH_FILES_OTHER// /,})"
+  want=$(oh_files_parse "$1") || exit 1
+  oh_config_set files "$want"
+  oh_install
+  oh_ok "files: $(oh_files_label)"
+}
+
 # Strip every omarchohard-*.desktop reference from mimeapps.list and drop
 # keys left empty, then put back the handlers we saved, for the types the
 # user's list still gave to omarchohard.
@@ -215,10 +231,10 @@ oh_mime_restore() {
 
 oh_install() {
   oh_config_load
-  local isolated=0 mail prewarm=0 bin id mimes schemes scheme apps=
+  local isolated=0 mail prewarm=0 bin id mime schemes scheme apps=
   mail=$(oh_config_get mail)
   [[ $mail == 0 ]] || mail=1
-  local -a claim
+  local -a claim all drop
   while (($#)); do
     case $1 in
     --isolated) isolated=1 ;;
@@ -253,15 +269,20 @@ oh_install() {
   for id in $(oh_enabled_apps); do
     oh_icon_install "$id"
     oh_desktop_entry_write "$id" "$bin"
-    mimes=$(oh_app_mimes "$id")
     schemes=$(oh_app_schemes "$id")
-    claim=()
-    [[ -n $mimes ]] && IFS=';' read -r -a claim <<<"$mimes"
+    mapfile -t claim < <(oh_app_file_mimes "$id")
+    all=() drop=()
+    [[ -n $(oh_app_mimes "$id") ]] && IFS=';' read -r -a all <<<"$(oh_app_mimes "$id")"
+    for mime in "${all[@]}"; do
+      [[ " ${claim[*]} " == *" $mime "* ]] || drop+=("$mime")
+    done
     for scheme in ${schemes//;/ }; do
       [[ $scheme == mailto && $mail == 0 ]] && continue
       claim+=("x-scheme-handler/$scheme")
     done
     ((${#claim[@]})) && oh_mime_claim "$id" "${claim[@]}"
+    # Formats the config `files` no longer names go back to their old handler.
+    ((${#drop[@]})) && oh_mime_release_types "$(oh_app_desktop_id "$id")" "${drop[@]}"
     oh_ok "$(oh_app_name "$id")"
   done
   # mail=0 after an install with mail: give mailto back.

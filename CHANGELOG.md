@@ -8,11 +8,33 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+### Added
+
+- Setup asks which files open in Office: Microsoft Office files only (the
+  default), or those plus other formats, all of them or the ones you pick
+  (`.odt`, `.ods`, `.odp`, `.rtf`, `.csv`). Only formats of the apps you
+  installed are offered.
+- `omarchohard files` shows the choice; `omarchohard files microsoft|all|LIST`
+  changes it, such as `omarchohard files odt,csv`. Formats you turn off go
+  back to the app that had them before.
+- `setup --files microsoft|all|LIST` answers the question without asking.
+  `setup --yes` without it keeps the current choice.
+- `.csv` files can open in Excel (`omarchohard files csv`).
+
 ### Changed
 
+- OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files no
+  longer open in Office unless you choose them (`omarchohard files all`).
+  The next install hands them back to the app that had them before.
 - omarchohard has its own logo, the `omarchohard` icon. The Setup launcher,
   "Open in Windows" and notifications use it instead of the Microsoft 365
   icon.
+
+### Fixed
+
+- Word templates (`.dot`), macro-enabled Excel templates (`.xltm`),
+  macro-enabled PowerPoint slide shows (`.ppsm`) and macro-enabled
+  PowerPoint templates (`.potm`) now open in Office from Files.
 
 ## [0.3.0] - 2026-11-12
 
