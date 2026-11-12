@@ -1053,6 +1053,16 @@ current_beat() {
   grep -qF 'if ($p.ExitCode -ne 0) { Write-AgentLog "error slim`t$($jobs[$p]) : slim ended with exit code $($p.ExitCode) before it finished" }' "$ps"
 }
 
+@test "the agent stays while any window is open, then signs its session out" {
+  local ps=$OH_REPO_ROOT/share/omarchohard/vm/agent.ps1
+  # shellcheck disable=SC2016 # PowerShell text, matched as written
+  grep -qF '[bool](Get-Process | Where-Object { $_.SessionId -eq $session -and $_.MainWindowHandle -ne 0 -and $shell -notcontains $_.ProcessName })' "$ps"
+  # shellcheck disable=SC2016 # PowerShell text, matched as written
+  grep -qF 'if (Test-InUse) { $last = $now }' "$ps"
+  # The sign-out comes last, after the beat is gone, and only with no window.
+  [ "$(tail -n4 "$ps")" = "$(printf '%s\n' 'if (-not (Test-SessionWindow)) {' "  Write-AgentLog 'signing the session out'" '  logoff.exe' '}')" ]
+}
+
 @test "an agent from before an upgrade gets no slim request" {
   agent_on
   printf '1\n' >"$AGENT/agent.beat"
