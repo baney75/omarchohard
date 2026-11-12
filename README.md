@@ -13,9 +13,10 @@ curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh
 Run from a terminal, that one line installs the CLI and starts a short guided
 setup. Its first question is which Office you want:
 
-- **Desktop Office**: the real Windows apps, with add-ins, macros, offline
-  use and Office's own updates. A one-time install of about 45 minutes; needs
-  KVM, 16 GB of memory and about 80 GB of disk.
+- **Desktop Office**: the real Windows apps, with add-ins, macros, printing
+  to your Linux printers, offline use and Office's own updates. A one-time
+  install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of
+  disk.
 - **Web apps**: Microsoft's web apps as app windows. Ready in about two
   minutes and light on memory.
 
@@ -352,9 +353,21 @@ omarchohard desktop update           # update Office and Windows now
   omarchohard adds a few window rules (`~/.config/hypr/omarchohard.lua`, loaded
   by one line in `hyprland.lua`): documents stay opaque, and the hidden
   RemoteApp marker window stays out of sight. Teams stays a web app.
-- **Add-ins and macros** work as on Windows. `desktop run` opens any file
-  under your home folder or `/run/media` with its Windows program, so an
-  `.xll`, `.xlam`, `.ppam`, `.dotm` or `.vsto` add-in installs into Office.
+- **Add-ins and macros.** `desktop run` opens any file under your home
+  folder or `/run/media` with its Windows program, so an `.xll`, `.xlam`,
+  `.ppam`, `.dotm` or `.vsto` add-in installs into Office. Macros follow
+  Office's own Trust Center settings, which omarchohard does not change: a
+  `.docm` opened from Files showed Word's "Macros have been disabled" bar
+  with **Enable Content**, and its `AutoOpen` macro did not run. With
+  macros allowed in Word's Trust Center, the same macro ran 2 seconds
+  after the document opened.
+- **Printing.** Your Linux (CUPS) printers show in Windows as
+  `NAME (redirected N)`, and Office prints to them. On the test VM, pages
+  printed from Word and from PowerShell reached a CUPS queue.
+- **Clipboard.** Text copied in Windows pastes into Linux apps within about
+  2 seconds. Text copied in an X11 app reached Windows. Text copied in a
+  Wayland app did not reach Windows in the nested Hyprland test session;
+  this is untested on a real Omarchy desktop.
 - **Updates.** Office updates itself in the background. `desktop update`
   asks for an update now and starts a Windows Update scan;
   `--channel current|monthly|semi-annual` and `--to VERSION` choose what to
