@@ -15,13 +15,14 @@ setup() {
 
 # Answer the first request like the VM would, keeping a copy of it.
 fake_vm() {
+  local answer=${1:-Office: licensed}
   (
     for _ in $(seq 100); do
       for r in "$INBOX"/*.request; do
         [ -f "$r" ] || continue
         cp "$r" "$BATS_TEST_TMPDIR/seen.json"
         rm -f "$r"
-        printf 'Office: licensed\n' >"${r%.request}.result"
+        printf '%s\n' "$answer" >"${r%.request}.result"
         exit 0
       done
       sleep 0.1
@@ -377,4 +378,66 @@ freerdp_stub() {
   "$OH" uninstall >/dev/null 2>&1
   [ ! -e "$entry" ]
   [ ! -e "$pkg" ]
+}
+
+@test "desktop update sends a fixed-word request and prints Office's answer" {
+  vm_stub
+  answer='{"version":"16.0.19328.20100","channel":"Current","message":"Office update started; Windows Update is checking too"}'
+  fake_vm "$answer"
+  run "$OH" desktop update
+  wait
+  [ "$status" -eq 0 ]
+  [[ $output == *"$answer"* ]]
+  [ "$(cat "$BATS_TEST_TMPDIR/seen.json")" = '{"action":"update","key":""}' ]
+  fake_vm "$answer"
+  "$OH" desktop update --to 16.0.19127.20264 >/dev/null 2>&1
+  wait
+  [ "$(cat "$BATS_TEST_TMPDIR/seen.json")" = '{"action":"update","key":"","version":"16.0.19127.20264"}' ]
+  fake_vm "$answer"
+  "$OH" desktop update --channel monthly --to 16.0.19127.20264 >/dev/null 2>&1
+  wait
+  [ "$(cat "$BATS_TEST_TMPDIR/seen.json")" = '{"action":"channel","key":"","channel":"MonthlyEnterprise","version":"16.0.19127.20264"}' ]
+  fake_vm "$answer"
+  "$OH" desktop update --channel semi-annual >/dev/null 2>&1
+  wait
+  [ "$(cat "$BATS_TEST_TMPDIR/seen.json")" = '{"action":"channel","key":"","channel":"SemiAnnual"}' ]
+  [ -z "$(ls -A "$INBOX")" ]
+}
+
+@test "desktop update refuses an unknown channel or a malformed version and writes nothing" {
+  vm_stub
+  for bad in beta Current semi-annual-preview; do
+    run "$OH" desktop update --channel "$bad"
+    [ "$status" -eq 1 ]
+  done
+  for bad in 16.0.1 16.0.1.2x '16.0.1.2","action":"x' $'16.0.1.2\n'; do
+    run "$OH" desktop update --to "$bad"
+    [ "$status" -eq 1 ]
+  done
+  [ -z "$(ls -A "$INBOX")" ]
+}
+
+# shellcheck disable=SC2016 # PowerShell's own $ in the expected text
+@test "the VM updates Office only on an allowed channel and version, and installs it with updates on" {
+  ps=$BATS_TEST_DIRNAME/../share/omarchohard/vm
+  grep -qxF "\$channels = @('Current', 'MonthlyEnterprise', 'SemiAnnual')" "$ps/inbox.ps1"
+  grep -qF -- '-cnotcontains "$($req.channel)"' "$ps/inbox.ps1"
+  grep -qxF "\$versionPattern = '^[0-9]+(\\.[0-9]+){3}\\z'" "$ps/inbox.ps1"
+  grep -qxF "\$c2r = 'C:\\Program Files\\Common Files\\microsoft shared\\ClickToRun\\OfficeC2RClient.exe'" "$ps/inbox.ps1"
+  grep -qF "@('/update', 'user', 'displaylevel=false', 'forceappshutdown=false')" "$ps/inbox.ps1"
+  grep -qF '"updatetoversion=$version"' "$ps/inbox.ps1"
+  grep -qF "UsoClient.exe\" -ArgumentList 'StartInteractiveScan'" "$ps/inbox.ps1"
+  grep -qF "'/changesetting', \"Channel=\$(\$req.channel)\"" "$ps/inbox.ps1"
+  grep -qxF '  <Updates Enabled="TRUE" Channel="$channel" />' "$ps/office.ps1"
+  grep -qF "HKLM:\\SOFTWARE\\Microsoft\\Office\\ClickToRun\\Configuration" "$ps/office-info.ps1"
+}
+
+@test "omarchohard update suggests desktop update only when the desktop tier is installed" {
+  run "$OH" update
+  [ "$status" -eq 0 ]
+  [[ $output != *"desktop update"* ]]
+  : >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  run "$OH" update
+  [ "$status" -eq 0 ]
+  [[ $output == *"to update it now: omarchohard desktop update"* ]]
 }

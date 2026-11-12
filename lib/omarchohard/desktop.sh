@@ -37,6 +37,9 @@ declare -gA OH_WINAPPS_APP=(
   [word]=word-o365 [excel]=excel-o365 [powerpoint]=powerpoint-o365
   [outlook]=outlook-o365 [onenote]=onenote-o365
 )
+# Office update channels: the name omarchohard takes, and Office's own name.
+declare -gA OH_OFFICE_CHANNELS=([current]=Current [monthly]=MonthlyEnterprise ["semi-annual"]=SemiAnnual)
+
 # The window class WinApps gives each app (FULL_NAME in its apps/*/info).
 declare -gA OH_WINAPPS_CLASS=(
   [word]="Microsoft Word" [excel]="Microsoft Excel" [powerpoint]="Microsoft PowerPoint"
@@ -582,8 +585,10 @@ oh_desktop_read_key() {
   printf '%s' "$key"
 }
 
+# EXTRA, the third argument, is more JSON members built from checked words
+# only (a channel name, a version number).
 oh_desktop_request() {
-  local action=$1 key=${2:-} id req result i
+  local action=$1 key=${2:-} extra=${3:-} id req result i
   id=$(date +%s)-$RANDOM
   req=$OH_VM_INBOX/$id.request
   result=$OH_VM_INBOX/$id.result
@@ -597,7 +602,7 @@ oh_desktop_request() {
   # so the printf builtin writes valid JSON and no process sees the key.
   (
     umask 077
-    printf '{"action":"%s","key":"%s"}\n' "$action" "$key" >"$req.tmp"
+    printf '{"action":"%s","key":"%s"%s}\n' "$action" "$key" "$extra" >"$req.tmp"
     mv "$req.tmp" "$req"
   )
   oh_say "Sent to the VM; waiting for Windows to apply it (up to 3 minutes)..."
@@ -649,6 +654,37 @@ oh_desktop_activate() {
   key=$(oh_desktop_read_key "$office_file" "Office product key")
   oh_desktop_request office-key "$key"
   key=''
+}
+
+# Office updates itself in the VM. This asks for an update now, through the
+# inbox: Office's own updater, to a set version or after moving to another
+# channel when asked, and a Windows Update scan. The answer is JSON with
+# Office's version, channel and a message.
+oh_desktop_update() {
+  local channel='' to='' extra=''
+  while (($#)); do
+    case $1 in
+    --channel)
+      channel=${2:?--channel needs current, monthly or semi-annual}
+      shift
+      ;;
+    --to)
+      to=${2:?--to needs an Office version like 16.0.19328.20100}
+      shift
+      ;;
+    *) oh_die "unknown desktop update option: $1" ;;
+    esac
+    shift
+  done
+  [[ -z $channel || -n ${OH_OFFICE_CHANNELS[$channel]:-} ]] || oh_die "--channel must be current, monthly or semi-annual"
+  [[ -z $to || $to =~ ^[0-9]+(\.[0-9]+){3}$ ]] || oh_die "--to needs an Office version like 16.0.19328.20100"
+  [[ -f $OH_VM_DIR/compose.yaml ]] || oh_die "run omarchohard desktop install first"
+  [[ -z $to ]] || extra+=",\"version\":\"$to\""
+  if [[ -n $channel ]]; then
+    oh_desktop_request channel '' ",\"channel\":\"${OH_OFFICE_CHANNELS[$channel]}\"$extra"
+  else
+    oh_desktop_request update '' "$extra"
+  fi
 }
 
 oh_desktop_prefer() {
@@ -725,8 +761,9 @@ oh_desktop() {
   apps) oh_desktop_apps ;;
   activate) oh_desktop_activate "$@" ;;
   run) oh_desktop_run "$@" ;;
+  update) oh_desktop_update "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|run|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|run|update|activate|prefer|remove" ;;
   esac
 }
