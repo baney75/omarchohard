@@ -146,6 +146,24 @@ app_url() {
   [[ $output == *"--no-sandbox --ozone-platform=wayland --no-first-run"*"--app=https://teams.cloud.microsoft/"* ]]
 }
 
+@test "every web app opens in the same browser profile, so one sign-in covers them all" {
+  local ids id
+  ids=$("$OH" launch notepad 2>&1 | sed -n 's/.*Apps: //p')
+  [ "$(wc -w <<<"$ids")" -ge 6 ]
+  for profile in shared isolated; do
+    [ "$profile" = shared ] || printf 'profile=isolated\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+    for id in $ids; do
+      run "$OH" launch "$id"
+      [ "$status" -eq 0 ]
+      [[ $output == *--app=https://* ]]
+      printf '%s\n' "${output%% --app=*}"
+    done >"$BATS_TEST_TMPDIR/$profile"
+    [ "$(sort -u "$BATS_TEST_TMPDIR/$profile" | wc -l)" -eq 1 ]
+  done
+  [ "$(grep -c user-data-dir "$BATS_TEST_TMPDIR/shared")" -eq 0 ]
+  grep -qF -- "--user-data-dir=$XDG_DATA_HOME/omarchohard/browser" "$BATS_TEST_TMPDIR/isolated"
+}
+
 @test "launch of an unknown app fails with the app list" {
   run "$OH" launch notepad
   [ "$status" -eq 1 ]

@@ -1083,9 +1083,11 @@ current_beat() {
   [ -z "$(ls "$AGENT"/*.go "$AGENT"/*.late 2>/dev/null)" ]
 }
 
-@test "slim.ps1 keeps Office, Teams and the Store, runs one at a time, spares fresh temp files, and trims" {
+@test "slim.ps1 keeps Office, its sign-in, Teams and the Store, runs one at a time, spares fresh temp files, and trims" {
   local ps=$OH_REPO_ROOT/share/omarchohard/vm/slim.ps1
   [ "$(grep -cE "'(Microsoft\.Office\.Desktop|MSTeams|Microsoft\.WindowsStore|Microsoft\.DesktopAppInstaller)'" "$ps")" -eq 0 ]
+  # Office's sign-in, shared by every Office app, runs through these.
+  [ "$(grep -ciE 'AAD\.BrokerPlugin|AccountsControl|CloudExperienceHost|TokenBroker|wlidsvc|IdentityCache|OneAuth' "$ps")" -eq 0 ]
   grep -qF "New-Object Threading.Mutex(\$true, 'Global\\omarchohard-slim', [ref]\$created)" "$ps"
   grep -qF "Where-Object LastWriteTime -LT \$day" "$ps"
   [ "$(grep -c 'AppData.Local.Temp' "$ps")" -eq 1 ]
