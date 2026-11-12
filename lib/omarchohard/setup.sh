@@ -435,7 +435,7 @@ oh_setup() {
     oh_warn "setup finished with problems; the lines marked fail above say what to fix"
   fi
   if oh_ui_interactive && oh_ui_confirm "Open Word now?" no; then
-    oh_launch word
+    oh_desktop_launch word || oh_launch word
   fi
   if ((desktop_failed)); then
     oh_warn "desktop Office did not finish; the web apps work meanwhile. See: omarchohard desktop status"
