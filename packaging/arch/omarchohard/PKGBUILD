@@ -4,7 +4,7 @@
 # vX.Y.Z: set pkgver, reset pkgrel=1, replace 'SKIP' with the tarball's
 # sha256 (updpkgsums), then run makepkg --printsrcinfo >.SRCINFO.
 pkgname=omarchohard
-pkgver=0.1.1
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Microsoft 365 web apps as desktop apps on Omarchy (Arch + Hyprland)'
 arch=('any')
@@ -20,7 +20,7 @@ optdepends=(
   'docker: desktop tier (Windows VM)'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('ea84c38a70ec3f117ee61df625a1c371dadfd052648e1d4560a1ce856987d454')
+sha256sums=('SKIP')
 
 package() {
   cd "$pkgname-$pkgver"

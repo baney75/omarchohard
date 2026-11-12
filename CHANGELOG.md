@@ -8,6 +8,8 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-12
+
 ### Added
 
 - `omarchohard desktop slim` shrinks the Windows VM's disk: apps for home
@@ -146,6 +148,7 @@ builds are not listed; they carry the version of the next release plus a
   default changes, and apps start with setsid rather than uwsm-app.
   `open --app word` takes 18 ms before the browser starts.
 
-[Unreleased]: https://github.com/baney75/omarchohard/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/baney75/omarchohard/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/baney75/omarchohard/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/baney75/omarchohard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/baney75/omarchohard/releases/tag/v0.1.0
