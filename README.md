@@ -1,3 +1,5 @@
+<img src="share/omarchohard/icons/omarchohard.svg" width="72" height="72" alt="">
+
 # omarchohard
 
 Real Microsoft Office desktop apps on [Omarchy](https://omarchy.org) (Arch

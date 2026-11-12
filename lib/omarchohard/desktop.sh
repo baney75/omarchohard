@@ -954,7 +954,7 @@ oh_desktop_addin_entry_write() {
     printf 'Name=Open in Windows\n'
     printf 'Comment=Open the file in Windows with its Windows program: add-ins, installers, documents\n'
     printf 'Exec=%s desktop run %%f\n' "$(oh_desktop_exec_arg "$bin")"
-    printf 'Icon=omarchohard-m365\nTerminal=false\nNoDisplay=true\nCategories=Office;\n'
+    printf 'Icon=omarchohard\nTerminal=false\nNoDisplay=true\nCategories=Office;\n'
     printf 'MimeType=%s\n' "$OH_ADDIN_MIMES"
   } >"$file"
   oh_manifest_add "$file"

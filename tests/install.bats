@@ -19,6 +19,9 @@ snapshot() {
   [ "$(mime_default application/vnd.openxmlformats-officedocument.wordprocessingml.document)" = omarchohard-word.desktop ]
   [ "$(mime_default x-scheme-handler/msteams)" = omarchohard-teams.desktop ]
   [ "$(mime_default x-scheme-handler/mailto)" = omarchohard-outlook.desktop ]
+  # Setup carries omarchohard's own icon, not Microsoft 365's.
+  cmp "$XDG_DATA_HOME/icons/hicolor/scalable/apps/omarchohard.svg" "$OH_REPO_ROOT/share/omarchohard/icons/omarchohard.svg"
+  grep -qx 'Icon=omarchohard' "$APPS/omarchohard-setup.desktop"
 }
 
 @test "install twice is idempotent" {

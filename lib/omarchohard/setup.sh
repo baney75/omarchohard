@@ -180,7 +180,7 @@ oh_setup_entry_write() {
     printf 'Name=Microsoft 365 Setup\n'
     printf 'Comment=Set up Word, Excel, PowerPoint, Outlook, Teams and OneDrive on Omarchy\n'
     printf 'Exec=%s setup --gui\n' "$(oh_desktop_exec_arg "$bin")"
-    printf 'Icon=omarchohard-m365\nTerminal=false\nCategories=Settings;Office;\n'
+    printf 'Icon=omarchohard\nTerminal=false\nCategories=Settings;Office;\n'
     printf 'Keywords=Microsoft;Office;365;OneDrive;setup;sign in;\n'
   } >"$file"
   oh_manifest_add "$file"

@@ -8,6 +8,12 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+### Changed
+
+- omarchohard has its own logo, the `omarchohard` icon. The Setup launcher,
+  "Open in Windows" and notifications use it instead of the Microsoft 365
+  icon.
+
 ## [0.3.0] - 2026-11-12
 
 ### Added
