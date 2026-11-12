@@ -40,11 +40,20 @@ declare -gA OH_WINAPPS_APP=(
 # Office update channels: the name omarchohard takes, and Office's own name.
 declare -gA OH_OFFICE_CHANNELS=([current]=Current [monthly]=MonthlyEnterprise ["semi-annual"]=SemiAnnual)
 
-# The window class WinApps gives each app (FULL_NAME in its apps/*/info).
-declare -gA OH_WINAPPS_CLASS=(
-  [word]="Microsoft Word" [excel]="Microsoft Excel" [powerpoint]="Microsoft PowerPoint"
-  [outlook]="Microsoft Outlook" [onenote]="Microsoft OneNote"
+# The window title of each app: "Report.docx - Word", or the app's own name
+# while no document is open. Not the window class: every new FreeRDP
+# RemoteApp connection takes over all windows of the Windows session, so once
+# Excel opens, Word's window has the class "Microsoft Excel" too (seen live,
+# 2026-11-12). The Hyprland rules in omarchohard.lua use the same titles.
+declare -gA OH_WINAPPS_TITLE=(
+  [word]='^(.+ - Word|Microsoft Word)$'
+  [excel]='^(.+ - Excel|Microsoft Excel)$'
+  [powerpoint]='^(.+ - PowerPoint|Microsoft PowerPoint)$'
+  [outlook]='^(.+- Outlook|Outlook)$'
+  [onenote]='^(.+ - OneNote|OneNote)$'
 )
+# The hidden window each RemoteApp session keeps open.
+OH_RDP_MARKER='RemoteApp Marker Window'
 
 oh_desktop_engine() {
   if oh_have docker && docker info >/dev/null 2>&1; then
@@ -478,8 +487,19 @@ oh_desktop_ready() {
 oh_desktop_launch() {
   local app=$1 wa=${OH_WINAPPS_APP[$1]:-}
   [[ -n $wa && $(oh_config_get open_with) == desktop ]] && oh_desktop_ready || return 1
-  oh_focus_existing "^${OH_WINAPPS_CLASS[$app]}\$" && return 0
+  oh_desktop_focus "${OH_WINAPPS_TITLE[$app]}" && return 0
   oh_spawn winapps "$wa"
+}
+
+# Raise the first desktop Office window whose title matches. A web app with
+# the same title is left alone: Chromium app windows have a class with "__"
+# in it (host__path), and FreeRDP's classes never do.
+oh_desktop_focus() {
+  local re=$1 address
+  oh_have hyprctl && oh_have jq || return 1
+  address=$(hyprctl clients -j 2>/dev/null | jq -r --arg re "$re" --arg marker "$OH_RDP_MARKER" \
+    'first(.[] | select(.title != $marker and (.title | test($re)) and (.class | contains("__") | not))) | .address' 2>/dev/null) || return 1
+  oh_focus_address "$address"
 }
 
 oh_desktop_open_file() {

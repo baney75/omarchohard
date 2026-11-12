@@ -73,9 +73,15 @@ oh_window_class_regex() {
 }
 
 oh_focus_existing() {
-  local re=$1 address reply
+  local re=$1 address
   oh_have hyprctl && oh_have jq || return 1
   address=$(hyprctl clients -j 2>/dev/null | jq -r --arg re "$re" 'first(.[] | select(.class | test($re))) | .address' 2>/dev/null) || return 1
+  oh_focus_address "$address"
+}
+
+# Focus the window at a hyprctl address; 1 when there is none.
+oh_focus_address() {
+  local address=$1 reply
   [[ -n $address && $address != null ]] || return 1
   if oh_dry; then
     printf 'would run: hyprctl dispatch hl.dsp.focus({ window = "address:%s" })\n' "$address"

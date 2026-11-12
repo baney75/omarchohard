@@ -314,16 +314,38 @@ desktop_preferred() {
   printf 'open_with=desktop\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
 }
 
-@test "with desktop Office preferred, open --app raises the app's window or starts it" {
+@test "with desktop Office preferred, open --app raises the app's window by its title, or starts it" {
   desktop_preferred
   export OMARCHOHARD_DRY_RUN=1
+  # As seen live: once Excel opened, every window of the Windows session took
+  # its class, Word's too. The web app titled "Microsoft Word" is not desktop
+  # Office, and the RemoteApp marker window is never an app.
+  cat >"$HOME/clients.json" <<'JSON'
+[{"class":"chrome-word.cloud.microsoft__-Default","title":"Microsoft Word","address":"0x9"},
+ {"class":"Microsoft Excel","title":"RemoteApp Marker Window","address":"0x1"},
+ {"class":"Microsoft Excel","title":"Report.docx - Word","address":"0x2"},
+ {"class":"Microsoft Excel","title":"Budget.xlsx - Excel","address":"0x3"},
+ {"class":"Microsoft Excel","title":"Inbox - ada@example.com - Outlook","address":"0x4"},
+ {"class":"Microsoft Excel","title":"OneNote","address":"0x5"}]
+JSON
   # shellcheck disable=SC2016
-  stub hyprctl 'case "$1" in clients) echo "[{\"class\":\"Microsoft Word 2\",\"address\":\"0x1\"},{\"class\":\"Microsoft Word\",\"address\":\"0x2\"}]" ;; esac'
+  stub hyprctl 'case "$1" in clients) cat "$HOME/clients.json" ;; esac'
+  focused() { [ "$output" = "would run: hyprctl dispatch hl.dsp.focus({ window = \"address:$1\" })" ]; }
   run "$OH" open --app word
   [ "$status" -eq 0 ]
-  [ "$output" = 'would run: hyprctl dispatch hl.dsp.focus({ window = "address:0x2" })' ]
+  focused 0x2
   run "$OH" open --app excel
-  [ "$output" = 'would run: winapps excel-o365' ]
+  focused 0x3
+  run "$OH" open --app outlook
+  focused 0x4
+  run "$OH" open --app onenote
+  focused 0x5
+  run "$OH" open --app powerpoint
+  [ "$output" = 'would run: winapps powerpoint-o365' ]
+  # With only the web app and the marker open, Word starts.
+  printf '[{"class":"chrome-word.cloud.microsoft__-Default","title":"Microsoft Word","address":"0x9"},{"class":"Microsoft Word","title":"RemoteApp Marker Window","address":"0x1"}]' >"$HOME/clients.json"
+  run "$OH" open --app word
+  [ "$output" = 'would run: winapps word-o365' ]
   # Teams has no desktop version here; it stays the web app.
   run "$OH" open --app teams
   [[ $output == *"--app=https://teams.cloud.microsoft/"* ]]
