@@ -8,6 +8,14 @@ builds are not listed; they carry the version of the next release plus a
 
 ## [Unreleased]
 
+### Added
+
+- Desktop Office prints to your Linux printers. omarchohard's RDP
+  connections pass FreeRDP's `/printer`, so each CUPS printer shows in
+  Windows as `NAME (redirected N)`. On the test VM, pages from PowerShell's
+  `Out-Printer` and from Word reached a CUPS queue; with no CUPS server the
+  connection still opens and Windows lists no redirected printers.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added

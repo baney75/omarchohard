@@ -636,7 +636,8 @@ oh_desktop_run() {
   # /from-stdin:force reads the password from stdin before connecting
   # (FreeRDP 3 client/common/cmdline.c), so it is never in an argument list.
   # WinApps itself passes /p:, which every process on the machine can read.
-  args+=(/from-stdin:force /cert:tofu +home-drive)
+  # /printer brings the host's CUPS printers into Windows, as in the holder.
+  args+=(/from-stdin:force /cert:tofu +home-drive /printer)
   [[ -d /run/media ]] && args+=("/drive:media,/run/media")
   args+=("/wm-class:Microsoft Windows" "/app:program:C:\\Windows\\explorer.exe,name:Open in Windows,cmd:\"$win\"")
   if oh_dry; then
@@ -888,7 +889,9 @@ oh_desktop_holder() {
   read -r -a flags <<<"${OH_WA[RDP_FLAGS]}"
   args=("/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}" "/u:${OH_WA[RDP_USER]}")
   [[ -z ${OH_WA[RDP_DOMAIN]} ]] || args+=("/d:${OH_WA[RDP_DOMAIN]}")
-  args+=(/from-stdin:force "${flags[@]}" +clipboard "/scale-desktop:$scale"
+  # /printer brings the host's CUPS printers into Windows, so Office prints
+  # to them. Added here, not in RDP_FLAGS, so existing installs get it.
+  args+=(/from-stdin:force "${flags[@]}" +clipboard /printer "/scale-desktop:$scale"
     "/scale-device:$((scale <= 120 ? 100 : scale <= 160 ? 140 : 180))")
   [[ -d /run/media ]] && args+=("/drive:media,/run/media")
   # shellcheck disable=SC1003 # a Windows path ends in a backslash

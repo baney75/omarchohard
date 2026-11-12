@@ -447,6 +447,8 @@ freerdp_stub() {
   grep -qxF '/from-stdin:force' "$HOME/rdp.args"
   grep -qxF '/u:ada' "$HOME/rdp.args"
   grep -qxF '/v:127.0.0.1:3389' "$HOME/rdp.args"
+  # The host's CUPS printers show in Windows.
+  grep -qxF /printer "$HOME/rdp.args"
   # shellcheck disable=SC2016
   [ "$(cat "$HOME/rdp.stdin")" = 's3cr$t pw' ]
   run grep -F 's3cr' "$HOME/rdp.args"
@@ -850,6 +852,9 @@ esac'
   grep -qx /scale-desktop:160 "$HOME/rdp.args"
   grep -qx /scale-device:140 "$HOME/rdp.args"
   grep -qx +home-drive "$HOME/rdp.args"
+  # Added outside RDP_FLAGS, so a winapps.conf written before it gets it too.
+  grep -qx +clipboard "$HOME/rdp.args"
+  grep -qx /printer "$HOME/rdp.args"
   grep -qxF '/app:program:C:\Windows\System32\conhost.exe,name:omarchohard,cmd:--headless cmd.exe /c \\tsclient\home\.local\state\omarchohard\agent\first.cmd' "$HOME/rdp.args"
   first=$AGENT/first.cmd
   [ "$(sed -n 3p "$first")" = "$(printf 'start "" excel "%s"\r' '\\tsclient\home\Documents\Budget 100%%.xlsx')" ]
