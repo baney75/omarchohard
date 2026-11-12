@@ -2,6 +2,8 @@
 # Install and uninstall: desktop entries, icons, file and URL handlers.
 
 OH_MANIFEST=$OH_STATE_DIR/manifest
+# The version whose launchers and file types install last set.
+OH_INSTALL_STAMP=$OH_STATE_DIR/installed
 
 # A stable path for Exec= lines: the PATH entry when it points at this copy,
 # so an update that swaps the release directory keeps launchers working.
@@ -86,6 +88,10 @@ oh_mime_claim() {
   shift
   for mime in "$@"; do
     [[ -n $mime ]] || continue
+    # The refresh after an update takes only types never taken before: one
+    # with a saved line was ours once, and whoever has it now is the user's
+    # choice.
+    [[ -n ${OH_NEW_TYPES_ONLY:-} ]] && awk -F'\t' -v m="$mime" '$1 == m { found = 1 } END { exit !found }' "$OH_MIME_BACKUP" 2>/dev/null && continue
     oh_mime_backup "$mime"
     xdg-mime default "$desktop" "$mime"
   done
@@ -292,12 +298,24 @@ oh_install() {
   # The desktop tier's "Open in Windows", kept pointing at this copy.
   [[ -f $OH_APPS_DIR/$OH_ADDIN_ENTRY ]] && oh_desktop_addin_entry_write
   oh_refresh_desktop_db
+  mkdir -p "$OH_STATE_DIR" && oh_version >"$OH_INSTALL_STAMP"
   ((prewarm)) && oh_prewarm on
   oh_say ""
   oh_say "Installed. Next:"
   oh_say "  omarchohard login            sign in once with your school or work account"
   oh_say "  omarchohard onedrive setup   put your OneDrive on disk so files open from Files"
   oh_say "  omarchohard doctor           check everything"
+}
+
+# A package update brings new file types and launcher lines but runs no
+# user command, so the first open, launch or doctor after it installs
+# again, quietly, claiming only the types it never had. Nothing happens
+# when omarchohard was never installed for this user. Its own process, so
+# a failed step stops it before the stamp is written.
+oh_install_refresh() {
+  [[ -f $OH_APPS_DIR/omarchohard-setup.desktop ]] || return 0
+  [[ $(cat -- "$OH_INSTALL_STAMP" 2>/dev/null) == "$(oh_version)" ]] && return 0
+  OH_NEW_TYPES_ONLY=1 "$OH_SELF" install >/dev/null 2>&1 || oh_warn "re-applying launchers after the update failed; run: omarchohard install"
 }
 
 oh_uninstall() {
@@ -331,7 +349,7 @@ oh_uninstall() {
     rm -f "$OH_MANIFEST"
     [[ -z $kept ]] || printf '%s\n' "$kept" >"$OH_MANIFEST"
   fi
-  rm -f "$OH_APPS_DIR"/omarchohard-*.desktop "$OH_ICON_DIR"/scalable/apps/omarchohard-*.svg
+  rm -f "$OH_APPS_DIR"/omarchohard-*.desktop "$OH_ICON_DIR"/scalable/apps/omarchohard-*.svg "$OH_INSTALL_STAMP"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   oh_mime_restore
   oh_refresh_desktop_db

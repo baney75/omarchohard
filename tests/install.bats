@@ -49,6 +49,36 @@ snapshot() {
   [ "$(jq -r .fails <<<"$output")" = 0 ]
 }
 
+@test "the first doctor after a package update claims the types the update added" {
+  oh_install_quiet
+  stamp=$XDG_STATE_HOME/omarchohard/installed
+  [ "$(cat "$stamp")" = "$("$OH" version | cut -d' ' -f2)" ]
+  mime=application/vnd.ms-powerpoint.slideshow.macroEnabled.12
+  backup=$XDG_STATE_HOME/omarchohard/mime-backup.tsv
+  docx=application/vnd.openxmlformats-officedocument.wordprocessingml.document
+  # .docx went back to another app after the install: that choice stays.
+  dummy_app libreoffice-writer
+  xdg-mime default libreoffice-writer.desktop $docx
+  # An install by an older version: the type it did not know yet is not ours.
+  for old in 0.0.1 none; do
+    if [ $old = none ]; then rm "$stamp"; else echo $old >"$stamp"; fi
+    grep -v "^$mime	" "$backup" >"$backup.new" && mv "$backup.new" "$backup"
+    xdg-mime default org.example.viewer.desktop $mime
+    # doctor itself flags .docx, now another app's.
+    run "$OH" doctor
+    [ "$(mime_default $mime)" = omarchohard-powerpoint.desktop ]
+    [ "$(mime_default $docx)" = libreoffice-writer.desktop ]
+    [ "$(cat "$stamp")" = "$("$OH" version | cut -d' ' -f2)" ]
+  done
+}
+
+@test "doctor installs nothing for a user who never ran install" {
+  run "$OH" doctor
+  [ "$status" -eq 1 ]
+  [ ! -e "$APPS/omarchohard-word.desktop" ]
+  [ ! -e "$XDG_STATE_HOME/omarchohard/installed" ]
+}
+
 @test "doctor exits 1 when a desktop entry is removed" {
   oh_install_quiet
   rm "$APPS/omarchohard-excel.desktop"
