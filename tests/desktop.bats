@@ -449,6 +449,70 @@ freerdp_stub() {
   [ ! -e "$pkg" ]
 }
 
+# WinApps' setup.sh, answering nothing.
+winapps_setup_stub() {
+  wa=$XDG_DATA_HOME/omarchohard/winapps
+  mkdir -p "$wa"
+  printf '#!/bin/sh\nexit 0\n' >"$wa/setup.sh"
+  chmod +x "$wa/setup.sh"
+}
+
+@test "adding the desktop apps loads Hyprland rules through one line in hyprland.lua, and uninstall takes out only that line" {
+  oh_install_quiet
+  winapps_setup_stub
+  # A dotfiles-managed config: hyprland.lua is a symlink.
+  mkdir -p "$HOME/dotfiles" "$XDG_CONFIG_HOME/hypr"
+  printf -- '-- mine\no.window("^grok-bot$", { workspace = "special:scratchpad silent" })\n' >"$HOME/dotfiles/hyprland.lua"
+  cp "$HOME/dotfiles/hyprland.lua" "$BATS_TEST_TMPDIR/before"
+  conf=$XDG_CONFIG_HOME/hypr/hyprland.lua
+  ln -s "$HOME/dotfiles/hyprland.lua" "$conf"
+  line='pcall(dofile, os.getenv("HOME") .. "/.config/hypr/omarchohard.lua") -- omarchohard'
+  run "$OH" desktop apps
+  [ "$status" -eq 0 ]
+  [ "$(tail -n 1 "$conf")" = "$line" ]
+  [ "$(head -n 2 "$conf")" = "$(cat "$BATS_TEST_TMPDIR/before")" ]
+  [ -L "$conf" ]
+  rules=$XDG_CONFIG_HOME/hypr/omarchohard.lua
+  grep -qxF 'o.window({ title = "^RemoteApp Marker Window$" }, { workspace = "special:omarchohard silent", no_focus = true })' "$rules"
+  grep -qxF 'o.window({ title = "^(.+ - Word|Microsoft Word)$" }, { tag = "-default-opacity", opacity = "1 1" })' "$rules"
+  grep -qxF 'o.window({ title = "^(.+- Outlook|Outlook)$" }, { tag = "-default-opacity", opacity = "1 1" })' "$rules"
+  [ "$(grep -c 'opacity = "1 1"' "$rules")" -eq 5 ]
+  # The guarded line runs and loads all six rules, where Lua is at hand.
+  if command -v lua5.4 >/dev/null; then
+    printf 'o = { window = function() n = (n or 0) + 1 end }\n%s\nassert(n == 6)\n' "$line" >"$BATS_TEST_TMPDIR/load.lua"
+    lua5.4 "$BATS_TEST_TMPDIR/load.lua"
+  fi
+  # Twice adds nothing.
+  run "$OH" desktop apps
+  [ "$(grep -cxF "$line" "$conf")" -eq 1 ]
+  run "$OH" uninstall
+  [ "$status" -eq 0 ]
+  cmp "$conf" "$BATS_TEST_TMPDIR/before"
+  [ -L "$conf" ]
+  [ ! -e "$rules" ]
+}
+
+@test "with hyprland.conf instead of the Lua config, no Hyprland file is touched and doctor warns" {
+  oh_install_quiet
+  vm_stub
+  winapps_setup_stub
+  mkdir -p "$XDG_CONFIG_HOME/hypr"
+  printf 'windowrule = float, class:^(kitty)$\n' >"$XDG_CONFIG_HOME/hypr/hyprland.conf"
+  run "$OH" desktop apps
+  [ "$status" -eq 0 ]
+  [[ $output == *"uses hyprland.conf, not the Lua config"* ]]
+  [ "$(ls "$XDG_CONFIG_HOME/hypr")" = hyprland.conf ]
+  run "$OH" doctor --json
+  [[ $(check "$output" 'hyprland rules') == "warn Hyprland uses hyprland.conf"* ]]
+  # With the Lua config the rules load, and doctor says so.
+  : >"$XDG_CONFIG_HOME/hypr/hyprland.lua"
+  run "$OH" doctor --json
+  [[ $(check "$output" 'hyprland rules') == "warn not loaded"* ]]
+  "$OH" desktop apps
+  run "$OH" doctor --json
+  [ "$(check "$output" 'hyprland rules')" = "ok $XDG_CONFIG_HOME/hypr/omarchohard.lua" ]
+}
+
 @test "desktop update sends a fixed-word request and prints Office's answer" {
   vm_stub
   answer='{"version":"16.0.19328.20100","channel":"Current","message":"Office update started; Windows Update is checking too"}'

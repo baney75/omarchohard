@@ -461,6 +461,7 @@ oh_desktop_register() {
   oh_winapps_setup --user --setupAllOfficiallySupportedApps ||
     oh_die "WinApps could not add the apps; try again with: omarchohard desktop apps"
   oh_desktop_addin_entry_write
+  oh_desktop_hypr_write
   oh_refresh_desktop_db
   oh_desktop_prefer on
 }
@@ -471,6 +472,7 @@ oh_desktop_apps() {
   oh_say "WinApps now scans the VM and lists the apps it found. Choose the Office apps."
   oh_winapps_setup --user || oh_die "WinApps did not finish; run omarchohard desktop apps again"
   oh_desktop_addin_entry_write
+  oh_desktop_hypr_write
   oh_refresh_desktop_db
   oh_say ""
   oh_say "To open local files in desktop Office instead of the web apps:"
@@ -598,6 +600,70 @@ oh_desktop_addin_entry_write() {
 
 oh_desktop_addin_entry_remove() {
   rm -f -- "$OH_APPS_DIR/$OH_ADDIN_ENTRY" "${XDG_DATA_HOME:-$HOME/.local/share}/mime/packages/omarchohard-addins.xml"
+}
+
+# Hyprland window rules for desktop Office, in a file of their own that one
+# guarded line in hyprland.lua loads. Only Omarchy's Lua config is edited,
+# and only by adding that line; uninstall removes exactly that line.
+OH_HYPR_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/hypr
+OH_HYPR_RULES=$OH_HYPR_DIR/omarchohard.lua
+
+# The line that loads the rules. pcall keeps Hyprland's config loading when
+# the file is gone.
+oh_hypr_line() {
+  if [[ $OH_HYPR_RULES == "$HOME/.config/hypr/omarchohard.lua" ]]; then
+    printf '%s\n' 'pcall(dofile, os.getenv("HOME") .. "/.config/hypr/omarchohard.lua") -- omarchohard'
+  else
+    printf 'pcall(dofile, "%s") -- omarchohard\n' "$OH_HYPR_RULES"
+  fi
+}
+
+oh_desktop_hypr_write() {
+  local conf=$OH_HYPR_DIR/hyprland.lua line app
+  if [[ ! -f $conf ]]; then
+    [[ ! -f $OH_HYPR_DIR/hyprland.conf ]] ||
+      oh_warn "Hyprland here uses hyprland.conf, not the Lua config; omarchohard added no window rules for desktop Office"
+    return 0
+  fi
+  {
+    printf -- '-- Written by omarchohard for desktop Office; omarchohard uninstall removes it.\n'
+    printf -- '-- Matched by title: FreeRDP gives every window of the Windows session one class.\n\n'
+    printf -- '-- The window each RemoteApp session keeps open: out of sight, never focused.\n'
+    printf 'o.window({ title = "^%s$" }, { workspace = "special:omarchohard silent", no_focus = true })\n\n' "$OH_RDP_MARKER"
+    printf -- '-- Documents opaque, not in the translucent default app style.\n'
+    for app in word excel powerpoint outlook onenote; do
+      printf 'o.window({ title = "%s" }, { tag = "-default-opacity", opacity = "1 1" })\n' "${OH_WINAPPS_TITLE[$app]}"
+    done
+  } >"$OH_HYPR_RULES"
+  oh_manifest_add "$OH_HYPR_RULES"
+  line=$(oh_hypr_line)
+  grep -qxF -- "$line" "$conf" && return 0
+  # Appended on a line of its own; nothing else in the file changes.
+  [[ ! -s $conf || -z $(tail -c 1 "$conf") ]] || printf '\n' >>"$conf"
+  printf '%s\n' "$line" >>"$conf"
+  oh_manifest_add "hypr-line:$conf"
+}
+
+# Take our line back out of hyprland.lua. Written through the file, so a
+# symlinked config stays a symlink.
+oh_hypr_line_remove() {
+  local conf=$1 line tmp rc=0
+  line=$(oh_hypr_line)
+  [[ -f $conf ]] && grep -qxF -- "$line" "$conf" || return 0
+  tmp=$(mktemp)
+  grep -vxF -- "$line" "$conf" >"$tmp" || rc=$?
+  if ((rc > 1)); then
+    rm -f "$tmp"
+    oh_warn "could not remove the omarchohard line from $conf"
+    return 0
+  fi
+  cat "$tmp" >"$conf"
+  rm -f "$tmp"
+}
+
+oh_desktop_hypr_remove() {
+  oh_hypr_line_remove "$OH_HYPR_DIR/hyprland.lua"
+  rm -f -- "$OH_HYPR_RULES"
 }
 
 # Read a key without echoing it. Accepts XXXXX-XXXXX-XXXXX-XXXXX-XXXXX.
@@ -754,6 +820,7 @@ oh_desktop_remove() {
   fi
   oh_config_set open_with web
   oh_desktop_addin_entry_remove
+  oh_desktop_hypr_remove
   oh_refresh_desktop_db
   if ((delete_vm)); then oh_ok "desktop tier removed and the VM disk deleted"; else oh_ok "desktop tier stopped; the VM disk is kept"; fi
   oh_dim "WinApps launchers can be removed with: $OH_WINAPPS_DIR/setup.sh --user --uninstall"
@@ -809,6 +876,15 @@ oh_desktop_doctor() {
   else
     names=$(printf '%s, ' "${missing[@]}")
     oh_doc warn "desktop launchers" "missing ${names%, } (omarchohard desktop apps)"
+  fi
+  if [[ -f $OH_HYPR_DIR/hyprland.lua ]]; then
+    if [[ -f $OH_HYPR_RULES ]] && grep -qxF -- "$(oh_hypr_line)" "$OH_HYPR_DIR/hyprland.lua"; then
+      oh_doc ok "hyprland rules" "$OH_HYPR_RULES"
+    else
+      oh_doc warn "hyprland rules" "not loaded, so Office windows are translucent and the RemoteApp marker shows (omarchohard desktop apps adds them)"
+    fi
+  elif [[ -f $OH_HYPR_DIR/hyprland.conf ]]; then
+    oh_doc warn "hyprland rules" "Hyprland uses hyprland.conf, not the Lua config; no window rules for desktop Office"
   fi
   if [[ $(oh_config_get open_with) != desktop ]]; then
     oh_doc ok "open_with" "web; to open local files in desktop Office: omarchohard desktop prefer on"

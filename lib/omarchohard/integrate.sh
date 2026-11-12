@@ -298,7 +298,11 @@ oh_uninstall() {
         kept=$path
         continue
       fi
-      [[ -n $path ]] && rm -f -- "$path"
+      case $path in
+      # A line omarchohard added to a file of yours: only that line goes.
+      hypr-line:*) oh_hypr_line_remove "${path#hypr-line:}" ;;
+      ?*) rm -f -- "$path" ;;
+      esac
     done <"$OH_MANIFEST"
     rm -f "$OH_MANIFEST"
     [[ -z $kept ]] || printf '%s\n' "$kept" >"$OH_MANIFEST"
