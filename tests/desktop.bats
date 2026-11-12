@@ -103,6 +103,9 @@ fake_vm() {
   office=$(grep -n 'office.ps1' "$bat" | tail -1 | cut -d: -f1)
   reg=$(grep -nxF 'reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f' "$bat" | cut -d: -f1)
   [ -n "$reg" ] && [ "$office" -lt "$reg" ]
+  # The plain-text password automatic sign-in used is removed.
+  grep -qxF 'reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f' "$bat"
+  grep -qxF 'powercfg /hibernate off' "$bat"
   # Signing out is the last thing it does.
   [ "$(tail -n 1 "$bat")" = 'shutdown /l /f' ]
 }

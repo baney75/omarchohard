@@ -19,9 +19,14 @@ rem 3. Microsoft Office from Microsoft's CDN. office.ps1 writes "ready" (or
 rem "failed") to office-status.json before it returns.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\office.ps1 > C:\OEM\office.log 2>&1
 
+rem A VM never hibernates, so drop hiberfil.sys and the gigabytes it holds.
+powercfg /hibernate off
+
 rem 4. Sign out of the console, last. dockur signs the user in automatically
 rem after setup, and while that console session is open a RemoteApp shows
 rem "Another user is signed in" instead of the app. Automatic sign-in stays
 rem off, so the next boot leaves the session free for RemoteApp.
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f
+rem Automatic sign-in kept the password in plain text here; it is not needed now.
+reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f
 shutdown /l /f
