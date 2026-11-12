@@ -77,28 +77,36 @@ oh_ui_choose() {
   printf '%s\n' "${!answer}"
 }
 
-# oh_ui_pick HEADER OPTION...: several choices, all selected to start; prints
-# one per line. Plain prompts take numbers ("1 3 6"); Enter keeps them all.
+# oh_ui_pick HEADER OPTION...: several choices; prints the chosen, one per
+# line. All start selected, or the comma list in OH_PICK_SELECTED. Plain
+# prompts take numbers ("1 3 6"); Enter keeps the selected ones.
 oh_ui_pick() {
-  local header=$1 answer n
+  local header=$1 answer n selected
   shift
+  selected=${OH_PICK_SELECTED-$(
+    IFS=,
+    printf '%s' "$*"
+  )}
   if ! oh_ui_interactive; then
-    printf '%s\n' "$@"
-    return
+    for ((n = 1; n <= $#; n++)); do [[ ,$selected, == *",${!n},"* ]] && printf '%s\n' "${!n}"; done
+    return 0
   fi
   if oh_ui_gum; then
-    gum choose --no-limit --header "$header" --selected "$(
-      IFS=,
-      printf '%s' "$*"
-    )" "$@" <&"$OH_TTY_FD"
+    gum choose --no-limit --header "$header" --selected "$selected" "$@" <&"$OH_TTY_FD"
     return
   fi
   printf '%s\n' "$header" >&2
-  for ((n = 1; n <= $#; n++)); do printf '  %d) %s\n' "$n" "${!n}" >&2; done
-  read -r -p "Numbers to install [all]: " answer <&"$OH_TTY_FD" || answer=''
+  for ((n = 1; n <= $#; n++)); do
+    if [[ ,$selected, == *",${!n},"* ]]; then printf '  %d) %s *\n' "$n" "${!n}" >&2; else printf '  %d) %s\n' "$n" "${!n}" >&2; fi
+  done
+  if [[ -n ${OH_PICK_SELECTED+set} ]]; then
+    read -r -p "Numbers [the ones marked *]: " answer <&"$OH_TTY_FD" || answer=''
+  else
+    read -r -p "Numbers to install [all]: " answer <&"$OH_TTY_FD" || answer=''
+  fi
   if [[ -z ${answer//[[:space:],]/} ]]; then
-    printf '%s\n' "$@"
-    return
+    for ((n = 1; n <= $#; n++)); do [[ ,$selected, == *",${!n},"* ]] && printf '%s\n' "${!n}"; done
+    return 0
   fi
   for n in ${answer//,/ }; do
     [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= $#)) && printf '%s\n' "${!n}"
@@ -245,10 +253,22 @@ oh_setup_files() {
     echo microsoft
     return 0
   fi
-  mapfile -t picked < <(oh_ui_pick "Which other formats? (space toggles, Enter confirms)" "${offer[@]}")
+  # Formats already on start ticked; a first choice ticks them all.
+  local on='' sel=''
+  [[ $(oh_config_get files) == microsoft ]] || on=" $(oh_files_other | tr '\n' ' ')"
+  for label in "${offer[@]}"; do
+    ext=${label#.}
+    ext=${ext%% *}
+    [[ -z $on || $on == *" $ext "* ]] && sel+=${sel:+,}$label
+  done
+  mapfile -t picked < <(OH_PICK_SELECTED=$sel oh_ui_pick "Which other formats? (space toggles, Enter confirms)" "${offer[@]}")
   for label in "${picked[@]}"; do
     label=${label#.}
     want+=${want:+,}${label%% *}
+  done
+  # Formats of apps not picked this time stay as they were.
+  for ext in $(oh_files_other); do
+    oh_app_enabled "${OH_EXT_APP[$ext]}" || want+=${want:+,}$ext
   done
   oh_files_parse "$want"
 }

@@ -488,13 +488,22 @@ other_defaults() {
   [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
   [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
   [ "$(mime_default "$ODS")" != omarchohard-excel.desktop ]
-  # A rerun lists other formats first, so Enter does not drop them.
+  # A rerun offers the current choice first and ticks only the formats
+  # already on, so Enter at every question keeps .odt and .csv as they are.
   printf '1\n1\n2\n\n\n\n\ny\nn\n3\nn\nn\n' >"$answers"
   OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
   [ "$status" -eq 0 ]
   [[ $output == *"1) Microsoft Office files and other formats too"* ]]
-  grep -qx 'files=all' "$XDG_CONFIG_HOME/omarchohard/config"
+  [[ $output == *"1) .odt  OpenDocument text *"*"3) .odp  OpenDocument presentation"$'\n'* ]]
+  grep -qx 'files=odt,csv' "$XDG_CONFIG_HOME/omarchohard/config"
   [ "$(mime_default "$ODT")" = omarchohard-word.desktop ]
+  [ "$(mime_default "$ODP")" != omarchohard-powerpoint.desktop ]
+  # With only Excel picked, .odt stays in the choice for when Word is back.
+  printf '1\n1\n2\n\n2\n\n\ny\nn\n3\nn\nn\n' >"$answers"
+  OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup
+  [ "$status" -eq 0 ]
+  grep -qx 'files=odt,csv' "$XDG_CONFIG_HOME/omarchohard/config"
+  [ "$(mime_default text/csv)" = omarchohard-excel.desktop ]
 }
 
 @test "interactive setup offers only the formats of the apps picked, and skips the question without them" {
