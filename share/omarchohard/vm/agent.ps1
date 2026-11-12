@@ -57,7 +57,11 @@ function Assert-HostPath([string]$Path) {
 function Invoke-Request([string]$Line) {
   $verb, $arg = $Line -split "`t", 2
   if ($verb -eq 'run') {
-    Start-Process -FilePath (Assert-HostPath $arg)
+    # Start-Process reads [ and ] in a file name as wildcards; the shell
+    # opens the path as written.
+    $si = New-Object Diagnostics.ProcessStartInfo (Assert-HostPath $arg)
+    $si.UseShellExecute = $true
+    [void][Diagnostics.Process]::Start($si)
   } elseif ($verb -eq 'uri') {
     if ($arg -notmatch '^(ms-(word|excel|powerpoint)|onenote):') { throw "refused link: $arg" }
     Start-Process -FilePath $arg
@@ -138,7 +142,7 @@ while (([DateTime]::UtcNow - $last).TotalMinutes -lt $IdleMinutes) {
   }
   # A request goes first; warming waits for a quiet moment.
   if (($now - $lastWarm).TotalSeconds -ge 10 -and ($now - $lastRequest).TotalSeconds -ge 3) {
-    Start-WarmApps
+    try { Start-WarmApps } catch { Write-AgentLog "warm error: $($_.Exception.Message)" }
     $lastWarm = $now
   }
   Start-Sleep -Milliseconds 100

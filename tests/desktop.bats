@@ -897,6 +897,8 @@ esac'
   grep -qF "[IO.File]::Move(\$f, \"\$f.run\")" "$ps"
   grep -qF "if (-not \$Warm -or -not (Test-OfficeSignedIn)) { return }" "$ps"
   grep -qF "ApplicationID='0ff1ce15-a989-479d-af46-f275c6370663' AND LicenseStatus=1" "$ps"
+  grep -qF 'try { Start-WarmApps } catch {' "$ps"
+  grep -qF "\$si.UseShellExecute = \$true" "$ps"
   grep -qF "New-Object Threading.Mutex(\$true, 'Local\\omarchohard-agent', [ref]\$created)" "$ps"
 }
 
