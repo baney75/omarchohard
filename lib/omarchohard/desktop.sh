@@ -88,7 +88,7 @@ declare -gA OH_WA=()
 oh_winapps_conf_load() {
   local line key value
   OH_WA=([RDP_USER]=omarchohard [RDP_PASS]='' [RDP_DOMAIN]='' [RDP_IP]=127.0.0.1 [RDP_PORT]=3389
-    [RDP_FLAGS]='/cert:tofu /sound /microphone +home-drive' [RDP_SCALE]=100 [AUTOPAUSE]=off [AUTOPAUSE_TIME]=300)
+    [RDP_FLAGS]='/cert:tofu /sound /microphone +home-drive /printer' [RDP_SCALE]=100 [AUTOPAUSE]=off [AUTOPAUSE_TIME]=300)
   [[ -f $OH_WINAPPS_CONF ]] || return 1
   while IFS= read -r line || [[ -n $line ]]; do
     case $line in
@@ -220,7 +220,7 @@ VM_NAME="WinApps"
 WAFLAVOR="$engine"
 RDP_SCALE="$(oh_desktop_scale)"
 REMOVABLE_MEDIA="/run/media"
-RDP_FLAGS="/cert:tofu /sound /microphone +home-drive"
+RDP_FLAGS="/cert:tofu /sound /microphone +home-drive /printer"
 DEBUG="true"
 AUTOPAUSE="on"
 AUTOPAUSE_TIME="300"
@@ -890,8 +890,10 @@ oh_desktop_holder() {
   args=("/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}" "/u:${OH_WA[RDP_USER]}")
   [[ -z ${OH_WA[RDP_DOMAIN]} ]] || args+=("/d:${OH_WA[RDP_DOMAIN]}")
   # /printer brings the host's CUPS printers into Windows, so Office prints
-  # to them. Added here, not in RDP_FLAGS, so existing installs get it.
-  args+=(/from-stdin:force "${flags[@]}" +clipboard /printer "/scale-desktop:$scale"
+  # to them. New installs have it in RDP_FLAGS; a winapps.conf written
+  # before gets it here, and FreeRDP gets it once either way.
+  [[ " ${flags[*]} " == *" /printer "* ]] || flags+=(/printer)
+  args+=(/from-stdin:force "${flags[@]}" +clipboard "/scale-desktop:$scale"
     "/scale-device:$((scale <= 120 ? 100 : scale <= 160 ? 140 : 180))")
   [[ -d /run/media ]] && args+=("/drive:media,/run/media")
   # shellcheck disable=SC1003 # a Windows path ends in a backslash

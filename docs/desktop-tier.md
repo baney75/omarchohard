@@ -202,9 +202,10 @@ and a new install bring the new scripts.
   (`xwayland:force_zero_scaling`), so Windows scales itself: the holder
   passes the focused monitor's scale (`/scale-desktop:160` at 1.6) and keeps
   `RDP_SCALE` in `winapps.conf` the same for WinApps launches.
-- **Printing.** The holder and the `desktop run` fallback both pass
-  FreeRDP's `/printer`, outside `RDP_FLAGS`, so a `winapps.conf` written
-  before it gets it too. FreeRDP 3 asks CUPS for its printers and Windows
+- **Printing.** A new `winapps.conf` has FreeRDP's `/printer` in
+  `RDP_FLAGS`, so WinApps' own launches pass it. The holder adds it when an
+  older `winapps.conf` lacks it, and the `desktop run` fallback always
+  passes it. FreeRDP 3 asks CUPS for its printers and Windows
   shows each one as `NAME (redirected N)` with the `MS Publisher
   Imagesetter` driver, which sends PostScript to the CUPS queue. Measured on
   the test VM (2026-11-12, FreeRDP 3.33.1, CUPS 2.4): `Get-Printer` listed
@@ -228,7 +229,9 @@ and a new install bring the new scripts.
   did not run. Microsoft 365 was not signed in, and its "Sign in to get
   started with Word" window opened on top. To run a document's macros,
   choose Enable Content, or set a trusted location or the macro setting in
-  Word's Trust Center in Windows.
+  Word's Trust Center in Windows. With Word's macro setting at "Enable all
+  macros" (`VBAWarnings=1`, set for the test and removed after), the same
+  document's `AutoOpen` macro ran 2 s after `omarchohard open`.
 - The desktop tier adds an **Open in Windows** entry to Open With for those
   add-in types. It is hidden from the launcher, and uninstall removes it.
 - WinApps' own launchers pass the RDP password to FreeRDP on its command

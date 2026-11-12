@@ -831,6 +831,22 @@ fake_agent() {
   [ "$(cat "$HOME/winapps.log")" = word-o365 ]
 }
 
+@test "the hidden connection passes /printer once, whether or not winapps.conf's RDP_FLAGS has it" {
+  agent_on
+  for f in '/cert:tofu /sound /microphone +home-drive' '/cert:tofu /sound /microphone +home-drive /printer'; do
+    rm -f "$HOME/rdp.args" "$AGENT/agent.beat"
+    printf 'RDP_FLAGS="%s"\n' "$f" >>"$XDG_CONFIG_HOME/winapps/winapps.conf"
+    run "$OH" desktop open word
+    [ "$status" -eq 0 ]
+    for _ in $(seq 50); do
+      [ -s "$HOME/rdp.args" ] && break
+      sleep 0.1
+    done
+    [ "$(grep -cx /printer "$HOME/rdp.args")" -eq 1 ]
+    sleep 1
+  done
+}
+
 @test "with no agent, the first open starts one hidden connection: password on stdin, app and agent in first.cmd, the monitor's scale" {
   agent_on
   # shellcheck disable=SC2016
@@ -854,7 +870,7 @@ esac'
   grep -qx +home-drive "$HOME/rdp.args"
   # Added outside RDP_FLAGS, so a winapps.conf written before it gets it too.
   grep -qx +clipboard "$HOME/rdp.args"
-  grep -qx /printer "$HOME/rdp.args"
+  [ "$(grep -cx /printer "$HOME/rdp.args")" -eq 1 ]
   grep -qxF '/app:program:C:\Windows\System32\conhost.exe,name:omarchohard,cmd:--headless cmd.exe /c \\tsclient\home\.local\state\omarchohard\agent\first.cmd' "$HOME/rdp.args"
   first=$AGENT/first.cmd
   [ "$(sed -n 3p "$first")" = "$(printf 'start "" excel "%s"\r' '\\tsclient\home\Documents\Budget 100%%.xlsx')" ]
