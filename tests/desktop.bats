@@ -76,3 +76,60 @@ fake_vm() {
   run grep -qF 'w0rd' "$HOME/sed.log"
   [ "$status" -ne 0 ]
 }
+
+# A filesystem type for stat -f, so the btrfs path runs anywhere.
+fs_is() {
+  real_stat=$(command -v stat)
+  stub stat "case \"\$1\" in -f) echo $1 ;; *) exec $real_stat \"\$@\" ;; esac"
+}
+
+install_stubs() {
+  stub docker 'exit 0'
+  stub git 'exit 0'
+  # shellcheck disable=SC2016
+  stub chattr 'printf "%s\n" "$*" >>"$HOME/chattr.log"'
+}
+
+@test "desktop install keeps the VM disk in a folder, pins dockur, and turns off copy-on-write on btrfs" {
+  install_stubs
+  fs_is btrfs
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  vm=$XDG_DATA_HOME/omarchohard/vm
+  grep -qxF '      - ./storage:/storage' "$vm/compose.yaml"
+  grep -qxF '    image: ghcr.io/dockur/windows:6.06' "$vm/compose.yaml"
+  run grep -E 'data:|:latest' "$vm/compose.yaml"
+  [ "$status" -ne 0 ]
+  [ -d "$vm/storage" ]
+  [ "$(cat "$HOME/chattr.log")" = "+C $vm/storage" ]
+}
+
+@test "desktop install warns when chattr fails, and skips it off btrfs" {
+  install_stubs
+  stub chattr 'exit 1'
+  fs_is btrfs
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  [[ $output == *"could not turn off copy-on-write"* ]]
+  install_stubs
+  fs_is ext2/ext3
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/chattr.log" ]
+}
+
+@test "desktop install keeps the named volume of a VM made before 0.2.0" {
+  install_stubs
+  fs_is btrfs
+  vm=$XDG_DATA_HOME/omarchohard/vm
+  printf 'volumes:\n  data:\nservices:\n  windows:\n    volumes:\n      - data:/storage\n' >"$vm/compose.yaml"
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  grep -qxF '      - data:/storage' "$vm/compose.yaml"
+  grep -qxF '    image: ghcr.io/dockur/windows:6.06' "$vm/compose.yaml"
+  [ "$(sed -n '/^volumes:$/{n;p}' "$vm/compose.yaml")" = '  data:' ]
+  run grep -F './storage' "$vm/compose.yaml"
+  [ "$status" -ne 0 ]
+  [ ! -e "$vm/storage" ]
+  [ ! -e "$HOME/chattr.log" ]
+}

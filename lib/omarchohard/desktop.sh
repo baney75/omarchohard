@@ -5,6 +5,7 @@
 # Layout:
 #   $OH_DATA_DIR/winapps         pinned WinApps checkout
 #   $OH_DATA_DIR/vm/compose.yaml dockur/windows VM definition
+#   $OH_DATA_DIR/vm/storage      the VM disk (a named volume before 0.2.0)
 #   $OH_DATA_DIR/vm/oem          first-boot scripts copied into C:\OEM
 #   $OH_DATA_DIR/vm-inbox        one-shot requests the VM applies (activation)
 #
@@ -55,6 +56,24 @@ oh_desktop_compose() {
   fi
 }
 
+# The WinApps settings omarchohard uses, from winapps.conf. Parsed in bash so
+# the password never reaches argv. Returns 1 when there is no winapps.conf.
+declare -gA OH_WA=()
+oh_winapps_conf_load() {
+  local line key value
+  OH_WA=([RDP_USER]=omarchohard [RDP_PASS]='' [RDP_DOMAIN]='' [RDP_IP]=127.0.0.1 [RDP_PORT]=3389)
+  [[ -f $OH_WINAPPS_CONF ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+    RDP_USER=\"*\" | RDP_PASS=\"*\" | RDP_DOMAIN=\"*\" | RDP_IP=\"*\" | RDP_PORT=\"*\")
+      key=${line%%=*} value=${line#*=\"} value=${value%\"}
+      OH_WA[$key]=$value
+      ;;
+    RDP_PORT=[0-9]*) OH_WA[RDP_PORT]=${line#RDP_PORT=} ;;
+    esac
+  done <"$OH_WINAPPS_CONF"
+}
+
 oh_mem_kib() { awk -v k="$1" '$1 == k":" { print $2 }' /proc/meminfo; }
 
 # Preflight. Prints each result; returns 1 if the host cannot run the VM well.
@@ -102,8 +121,20 @@ oh_compose_str() {
   printf '%s' "$s"
 }
 
+# dockur warns that Windows Setup can fail when /storage is on btrfs,
+# Omarchy's default, as copy-on-write fragments the disk image. chattr +C on
+# the empty folder makes every file created in it later no-COW; it does not
+# change files already there, so it runs only before the disk image exists.
+oh_desktop_storage() {
+  local dir=$OH_VM_DIR/storage
+  mkdir -p "$dir"
+  [[ $(stat -f -c %T "$dir" 2>/dev/null) == btrfs && -z $(ls -A "$dir") ]] || return 0
+  oh_run chattr +C "$dir" 2>/dev/null ||
+    oh_warn "could not turn off copy-on-write on $dir (chattr +C); Windows Setup can fail on btrfs"
+}
+
 oh_desktop_install() {
-  local windows=11e office=m365 ram=4G force=0 user pass engine line tpl
+  local windows=11e office=m365 ram=4G force=0 legacy=0 user pass engine tpl
   while (($#)); do
     case $1 in
     --windows)
@@ -142,17 +173,11 @@ oh_desktop_install() {
   oh_run git -C "$OH_WINAPPS_DIR" checkout --quiet "$OH_WINAPPS_REF"
 
   # A local-only Windows account for RDP. The VM listens on 127.0.0.1 only.
-  user=omarchohard pass=''
-  if [[ -f $OH_WINAPPS_CONF ]]; then
+  if oh_winapps_conf_load; then
     oh_warn "keeping your existing $OH_WINAPPS_CONF"
-    # The local VM account omarchohard manages. Parsed in bash so the password never reaches argv.
-    while IFS= read -r line || [[ -n $line ]]; do
-      case $line in
-      RDP_PASS=\"*\") pass=${line#RDP_PASS=\"} pass=${pass%\"} ;;
-      RDP_USER=\"*\") user=${line#RDP_USER=\"} user=${user%\"} ;;
-      esac
-    done <"$OH_WINAPPS_CONF"
+    user=${OH_WA[RDP_USER]} pass=${OH_WA[RDP_PASS]}
   else
+    user=omarchohard
     pass=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     mkdir -p "${OH_WINAPPS_CONF%/*}"
     (
@@ -187,12 +212,22 @@ EOF
   [[ $OH_VM_INBOX == "$HOME"/* ]] || oh_die "the VM inbox must be under your home folder (it is shared with the VM)"
   # shellcheck disable=SC1003 # '\\' is one backslash to tr
   printf '%s\n' "${OH_VM_INBOX#"$HOME"/}" | tr '/' '\\' >"$OH_VM_DIR/oem/inbox-path.txt"
+  # A VM made before 0.2.0 keeps its disk in the named volume "data"; new
+  # installs keep it in a folder next to compose.yaml.
+  [[ -f $OH_VM_DIR/compose.yaml ]] && grep -qxF '      - data:/storage' "$OH_VM_DIR/compose.yaml" && legacy=1
   # Built in bash, not sed, so the password is never in a process's arguments.
   tpl=$(<"$OH_SHARE/vm/compose.yaml.in")
   tpl=${tpl//@VERSION@/"$windows"}
   tpl=${tpl//@RAM@/"$ram"}
   tpl=${tpl//@USER@/"$(oh_compose_str "$user")"}
   tpl=${tpl//@PASS@/"$(oh_compose_str "$pass")"}
+  if ((legacy)); then
+    tpl=${tpl//'      - ./storage:/storage'/'      - data:/storage'}
+    tpl=${tpl/$'\nservices:'/$'\nvolumes:\n  data:\nservices:'}
+    oh_dim "keeping the VM disk in its docker volume (made before omarchohard 0.2.0)"
+  else
+    oh_desktop_storage
+  fi
   (
     umask 077
     printf '%s\n' "$tpl" >"$OH_VM_DIR/compose.yaml"
@@ -342,6 +377,10 @@ oh_desktop_remove() {
     read -r -p "This deletes the Windows VM disk and everything in it. Type DELETE to confirm: " answer
     [[ $answer == DELETE ]] || oh_die "not deleted"
     oh_desktop_compose down -v
+    # The disk folder of an install made since 0.2.0. Windows' files in it
+    # belong to the container's root user, but the folder is yours.
+    oh_run rm -rf -- "$OH_VM_DIR/storage" 2>/dev/null ||
+      oh_warn "some VM files were not deleted; remove them with: sudo rm -rf $OH_VM_DIR/storage"
   else
     oh_desktop_compose down
   fi
