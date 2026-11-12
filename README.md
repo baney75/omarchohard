@@ -14,6 +14,11 @@ Run from a terminal, that one line installs the CLI and starts a short guided
 setup. It picks your browser, lets you choose apps, signs you in, sets up
 OneDrive and runs a check.
 
+![omarchohard installs, checks itself and opens Word, Excel, PowerPoint and Teams as tiled Hyprland windows](docs/media/demo.gif)
+
+Recorded in a clean Arch container under Hyprland: the one-line install,
+`omarchohard doctor`, then four apps opening as their own windows.
+
 ## What it is
 
 - A bash CLI that turns the Microsoft 365 web apps into desktop apps. Each app
