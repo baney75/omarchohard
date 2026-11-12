@@ -21,6 +21,24 @@ own Linux window:
 Word, Excel, PowerPoint, Outlook and OneNote work this way. Teams stays in the
 web app.
 
+> **The Windows VM can read your whole home folder.** dockur/windows shares
+> `~` with the VM, and a scheduled task runs there as SYSTEM every minute.
+> Anything in Windows (Office, an add-in, a macro in a document you open,
+> malware) can read every file under `~`, including
+> `~/.config/rclone/rclone.conf` (your OneDrive sign-in), browser profiles
+> with their cookies, `~/.ssh` and `~/.config/winapps/winapps.conf`.
+> Only use the desktop tier on a machine where that is acceptable.
+>
+> To limit it, stop the VM (`omarchohard desktop down`), edit
+> `~/.local/share/omarchohard/vm/compose.yaml` and change `- ${HOME}:/shared`
+> to a folder that holds only what Windows should see, for example
+> `- ${HOME}/WindowsShare:/shared`, then start it again
+> (`omarchohard desktop up`). Desktop Office can then open only files in that
+> folder, and `omarchohard desktop activate` stops working, because its inbox
+> is under `~/.local/share`; enter a product key inside Windows instead.
+> `omarchohard desktop install` rewrites `compose.yaml`, so make the change
+> again after running it.
+
 ## Requirements
 
 | Need | Minimum | Checked by `desktop check` |
@@ -32,7 +50,8 @@ web app.
 | Disk | About 80 GB free in your home folder | Yes |
 
 `omarchohard desktop install` runs the same checks and stops if one fails;
-`--force` continues anyway.
+`--force` continues anyway. A 16 GB machine passes the memory check: the
+kernel keeps some memory back, so the check accepts 15 GiB or more.
 
 ## Install
 
@@ -61,7 +80,15 @@ The VM listens on 127.0.0.1 only (8006 for the web viewer, 3389 for RDP).
 Its Windows account is local, with a random 20-character password stored in
 `~/.config/winapps/winapps.conf` and `~/.local/share/omarchohard/vm/compose.yaml`,
 both mode 0600. Your home folder is shared with the VM, which is how desktop
-Office opens files under `~` and `/run/media`.
+Office opens files under `~` and `/run/media` (see the warning above).
+
+The Office installer (`setup.exe`, downloaded from Microsoft's CDN in the VM)
+runs only when its Authenticode signature is valid and signed by Microsoft
+Corporation; otherwise the install stops and `C:\OEM\office.log` says why.
+
+Office links from SharePoint and Teams ("Open in app", `ms-word:` and the
+like) still open in the web app with `prefer on`: WinApps starts desktop
+Office without the document.
 
 ## Activation and product keys
 
@@ -86,12 +113,17 @@ Office opens files under `~` and `/run/media`.
 3. omarchohard writes a one-shot request file, mode 0600, in
    `~/.local/share/omarchohard/vm-inbox` (mode 0700), which the VM sees
    through the shared home folder.
+   The request is written by the shell itself, so no process (on the host or
+   in Windows) ever has the key in its command line.
 4. A scheduled task in Windows checks the inbox once a minute. It deletes the
-   request before acting on it, applies the key with `OSPP.VBS` (Office) or
-   `slmgr` (Windows), and writes a result file with the key replaced by
-   `*****`.
+   request before acting on it, installs the key through the Windows
+   licensing service (`SoftwareLicensingService.InstallProductKey`, a method
+   call, not `slmgr` or `OSPP.VBS` arguments), activates the product that
+   key belongs to, and writes a result file with the license status and no
+   key.
 5. omarchohard waits up to 3 minutes, prints the result, and deletes both the
-   request and the result.
+   request and the result. If you press Ctrl-C or the wait times out, the
+   request file is deleted too.
 
 ## Remove
 
@@ -102,6 +134,9 @@ omarchohard desktop remove --delete-vm  # delete the VM disk (asks you to type D
 
 WinApps launchers come out with
 `~/.local/share/omarchohard/winapps/setup.sh --user --uninstall`.
+
+`omarchohard uninstall --purge` leaves the VM in place and says so; remove
+it with `omarchohard desktop remove --delete-vm`.
 
 ## Licensing
 
