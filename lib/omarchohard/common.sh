@@ -145,7 +145,7 @@ oh_notify() {
     return 0
   fi
   if oh_have notify-send; then
-    notify-send -a omarchohard -i omarchohard-m365 "$summary" "$body" 2>/dev/null || true
+    notify-send -a omarchohard -i omarchohard "$summary" "$body" 2>/dev/null || true
   fi
   oh_say "$summary${body:+: $body}"
 }

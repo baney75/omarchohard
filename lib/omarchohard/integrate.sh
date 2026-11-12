@@ -22,9 +22,11 @@ oh_manifest_add() {
   grep -qxF -- "$1" "$OH_MANIFEST" 2>/dev/null || printf '%s\n' "$1" >>"$OH_MANIFEST"
 }
 
+# The app's own icon is plain "omarchohard"; each Office app's is "omarchohard-<id>".
 oh_icon_install() {
-  local id=$1 dest
-  dest=$OH_ICON_DIR/scalable/apps/omarchohard-$id.svg
+  local id=$1 name=omarchohard-$1 dest
+  [[ $id == omarchohard ]] && name=omarchohard
+  dest=$OH_ICON_DIR/scalable/apps/$name.svg
   mkdir -p "${dest%/*}"
   cp "$OH_SHARE/icons/$id.svg" "$dest"
   oh_manifest_add "$dest"
@@ -244,6 +246,7 @@ oh_install() {
   [[ -f $OH_CONFIG ]] || oh_config_set channel "$(oh_config_get channel)"
 
   bin=$(oh_bin_path)
+  oh_icon_install omarchohard
   for id in $(oh_app_ids); do
     oh_app_enabled "$id" || oh_app_uninstall "$id"
   done
