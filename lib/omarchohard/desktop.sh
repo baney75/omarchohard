@@ -728,23 +728,64 @@ oh_desktop_remove() {
   oh_dim "WinApps launchers can be removed with: $OH_WINAPPS_DIR/setup.sh --user --uninstall"
 }
 
+# Desktop tier checks, once it is installed. A VM paused while idle is
+# fine: WinApps wakes it when an app opens.
 oh_desktop_doctor() {
   [[ -f $OH_VM_DIR/compose.yaml ]] || return 0
-  if ! oh_have winapps; then
-    oh_doc warn "desktop Office" "VM defined but WinApps launchers are not installed (omarchohard desktop apps)"
-    return 0
-  fi
-  local engine state
-  engine=$(oh_desktop_engine 2>/dev/null) || {
-    oh_doc fail "desktop Office" "no container engine"
-    return 0
-  }
-  state=$("$engine" inspect -f '{{.State.Status}}' WinApps 2>/dev/null || echo missing)
-  case $state in
-  running) oh_doc ok "desktop Office" "VM running" ;;
-  exited | paused) oh_doc warn "desktop Office" "VM is $state (omarchohard desktop up)" ;;
-  *) oh_doc fail "desktop Office" "VM container is $state" ;;
+  local app wa have=() missing=() names
+  oh_desktop_phase
+  case $OH_VM_STATE in
+  running | restarting | created) oh_doc ok "desktop VM" "$OH_VM_STATE" ;;
+  paused) oh_doc ok "desktop VM" "paused while idle; it resumes when you open an app" ;;
+  *)
+    if [[ $OH_VM_PHASE == failed ]]; then oh_doc fail "desktop VM" "$OH_VM_DETAIL"; else
+      oh_doc warn "desktop VM" "${OH_VM_PHASE}: $OH_VM_DETAIL"
+    fi
+    ;;
   esac
+  case $OH_VM_PHASE in
+  downloading-windows | installing-windows | installing-office | starting)
+    oh_doc warn "desktop install" "$OH_VM_PHASE${OH_VM_DETAIL:+: $OH_VM_DETAIL} (follow it: omarchohard desktop wait)"
+    ;;
+  # A failed Office install is the "desktop Office" check below.
+  failed) [[ $OH_VM_STATE != running || $OH_OFFICE_PHASE == failed ]] || oh_doc fail "desktop install" "$OH_VM_DETAIL" ;;
+  esac
+  if [[ $OH_VM_STATE == running ]]; then
+    if ((OH_RDP_UP)); then
+      oh_doc ok "desktop RDP" "${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} answers"
+    elif [[ $OH_VM_PHASE == downloading-windows || $OH_VM_PHASE == installing-windows || $OH_VM_PHASE == starting ]]; then
+      oh_doc warn "desktop RDP" "no answer on ${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} yet; Windows is still installing or starting"
+    else
+      oh_doc fail "desktop RDP" "no answer on ${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} (restart the VM: omarchohard desktop down, then up)"
+    fi
+  fi
+  if [[ $OH_OFFICE_PHASE == failed ]]; then
+    oh_doc fail "desktop Office" "did not install: ${OH_OFFICE_ERROR:-no reason given}"
+  elif [[ -n $OH_OFFICE_VERSION ]]; then
+    oh_doc ok "desktop Office" "${OH_OFFICE_PRODUCT:+$OH_OFFICE_PRODUCT }$OH_OFFICE_VERSION, ${OH_OFFICE_CHANNEL:-unknown} channel"
+  else
+    oh_doc warn "desktop Office" "no version reported yet; the VM writes it once Office is installed"
+  fi
+  for app in word excel powerpoint outlook onenote; do
+    wa=${OH_WINAPPS_APP[$app]}
+    if [[ -f $OH_APPS_DIR/$wa.desktop ]]; then have+=("$(oh_app_name "$app")"); else missing+=("$(oh_app_name "$app")"); fi
+  done
+  if ! oh_have winapps; then
+    oh_doc warn "desktop launchers" "WinApps is not on PATH (add ~/.local/bin to PATH, or run: omarchohard desktop apps)"
+  elif ((${#missing[@]} == 0)); then
+    names=$(printf '%s, ' "${have[@]}")
+    oh_doc ok "desktop launchers" "${names%, }"
+  else
+    names=$(printf '%s, ' "${missing[@]}")
+    oh_doc warn "desktop launchers" "missing ${names%, } (omarchohard desktop apps)"
+  fi
+  if [[ $(oh_config_get open_with) != desktop ]]; then
+    oh_doc ok "open_with" "web; to open local files in desktop Office: omarchohard desktop prefer on"
+  elif oh_desktop_ready; then
+    oh_doc ok "open_with" "desktop"
+  else
+    oh_doc warn "open_with" "desktop, but WinApps is missing, so files open in the web apps"
+  fi
 }
 
 oh_desktop() {

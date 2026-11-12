@@ -441,3 +441,48 @@ freerdp_stub() {
   [ "$status" -eq 0 ]
   [[ $output == *"to update it now: omarchohard desktop update"* ]]
 }
+
+# The level and detail of check NAME in doctor --json output JSON: check JSON NAME.
+check() { jq -r --arg n "$2" '.checks[] | select(.name == $n) | .level + " " + .detail' <<<"$1"; }
+
+winapps_launchers() {
+  for wa in "$@"; do printf '[Desktop Entry]\nType=Application\nName=%s\nExec=winapps %s\n' "$wa" "$wa" >"$APPS/$wa.desktop"; done
+}
+
+@test "doctor checks the desktop VM, RDP, Office version, launchers and open_with" {
+  oh_install_quiet
+  vm_stub
+  desktop_preferred
+  rdp_listen
+  office_status ready
+  winapps_launchers word-o365 excel-o365 powerpoint-o365 outlook-o365 onenote-o365
+  run "$OH" doctor --json
+  [ "$(check "$output" 'desktop VM')" = "ok running" ]
+  [ "$(check "$output" 'desktop RDP')" = "ok 127.0.0.1:$(cat "$BATS_TEST_TMPDIR/rdp.port") answers" ]
+  [ "$(check "$output" 'desktop Office')" = "ok O365ProPlusRetail 16.0.19328.20100, Current channel" ]
+  [ "$(check "$output" 'desktop launchers')" = "ok Word, Excel, PowerPoint, Outlook, OneNote" ]
+  [ "$(check "$output" 'open_with')" = "ok desktop" ]
+  [ "$(jq .fails <<<"$output")" -eq 0 ]
+  # Paused while idle is fine, not a warning.
+  printf 'paused 0\n' >"$HOME/vm.state"
+  run "$OH" doctor --json
+  [ "$(check "$output" 'desktop VM')" = "ok paused while idle; it resumes when you open an app" ]
+  [ "$(jq '[.checks[] | select(.name | startswith("desktop")) | select(.level != "ok")] | length' <<<"$output")" -eq 0 ]
+}
+
+@test "doctor warns while Windows starts, about missing launchers, and fails a failed Office install" {
+  oh_install_quiet
+  vm_stub
+  office_status ready
+  stub winapps 'exit 0'
+  winapps_launchers excel-o365 powerpoint-o365 outlook-o365 onenote-o365
+  run "$OH" doctor --json
+  [[ $(check "$output" 'desktop install') == "warn starting"* ]]
+  [[ $(check "$output" 'desktop RDP') == "warn no answer on 127.0.0.1:3389 yet"* ]]
+  [ "$(check "$output" 'desktop launchers')" = "warn missing Word (omarchohard desktop apps)" ]
+  [[ $(check "$output" 'open_with') == "ok web; "* ]]
+  office_status failed 'setup.exe exited with code 17'
+  run "$OH" doctor --json
+  [ "$status" -eq 1 ]
+  [ "$(check "$output" 'desktop Office')" = "fail did not install: setup.exe exited with code 17" ]
+}
