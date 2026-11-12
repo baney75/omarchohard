@@ -404,6 +404,47 @@ freerdp_stub() {
   grep -qx 'unpause WinApps' "$HOME/docker.log"
 }
 
+@test "WinApps, its setup and FreeRDP run with Kerberos off for the local VM, and nothing else does" {
+  desktop_preferred
+  vm_stub
+  # shellcheck disable=SC2016
+  stub winapps 'printf "%s %s\n" "${KRB5_CONFIG:-unset}" "$*" >>"$HOME/winapps.log"'
+  run "$OH" open --app word
+  cp "$FIXTURES/test.docx" "$HOME/Notes.docx"
+  run "$OH" open --app word "$HOME/Notes.docx"
+  for _ in $(seq 50); do
+    [ "$(wc -l <"$HOME/winapps.log" 2>/dev/null)" = 2 ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$HOME/winapps.log")" = "$(printf '/dev/null word-o365\n/dev/null word-o365 %s' "$HOME/Notes.docx")" ]
+  # shellcheck disable=SC2016
+  stub xfreerdp3 'printf "%s\n" "${KRB5_CONFIG:-unset}" >"$HOME/rdp.env"; cat >/dev/null'
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\nRDP_IP="127.0.0.1"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  run "$OH" desktop run "$HOME/Notes.docx"
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/rdp.env" ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$HOME/rdp.env")" = /dev/null ]
+  wa=$XDG_DATA_HOME/omarchohard/winapps
+  mkdir -p "$wa"
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\necho "${KRB5_CONFIG:-unset}" >"$HOME/setup.env"\n' >"$wa/setup.sh"
+  chmod +x "$wa/setup.sh"
+  run "$OH" desktop apps
+  [ "$(cat "$HOME/setup.env")" = /dev/null ]
+  # The web apps' browser does not get it.
+  # shellcheck disable=SC2016
+  stub chromium 'printf "%s\n" "${KRB5_CONFIG:-unset}" >"$HOME/browser.env"'
+  run "$OH" open --app teams
+  for _ in $(seq 50); do
+    [ -s "$HOME/browser.env" ] && break
+    sleep 0.1
+  done
+  [ "$(cat "$HOME/browser.env")" = unset ]
+}
+
 @test "desktop run refuses files outside home and /run/media, and control characters" {
   vm_stub
   freerdp_stub

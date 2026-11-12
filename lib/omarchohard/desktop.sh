@@ -55,6 +55,13 @@ declare -gA OH_WINAPPS_TITLE=(
 # The hidden window each RemoteApp session keeps open.
 OH_RDP_MARKER='RemoteApp Marker Window'
 
+# FreeRDP tries Kerberos before NTLM. With Arch's example /etc/krb5.conf
+# (realm ATHENA.MIT.EDU) that costs about 0.1 s and a screen of errors on
+# every connection, and the local VM has no Kerberos. Each WinApps, setup and
+# FreeRDP process omarchohard starts gets KRB5_CONFIG=$OH_RDP_KRB5 in its own
+# environment; nothing else changes.
+OH_RDP_KRB5=/dev/null
+
 oh_desktop_engine() {
   if oh_have docker && docker info >/dev/null 2>&1; then
     echo docker
@@ -449,7 +456,7 @@ oh_desktop_wait() {
 # a RemoteApp then shows "Another user is signed in" instead of the app.
 oh_winapps_setup() {
   local rc=0
-  (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh "$@") || rc=$?
+  (cd "$OH_WINAPPS_DIR" && KRB5_CONFIG=$OH_RDP_KRB5 oh_run ./setup.sh "$@") || rc=$?
   ((rc != 14)) ||
     oh_warn "WinApps could not open an app over RDP. If Windows is signed in on its own screen, sign out of Windows once at http://127.0.0.1:8006 (Start, your name, Sign out), then run: omarchohard desktop apps"
   return "$rc"
@@ -490,7 +497,7 @@ oh_desktop_launch() {
   local app=$1 wa=${OH_WINAPPS_APP[$1]:-}
   [[ -n $wa && $(oh_config_get open_with) == desktop ]] && oh_desktop_ready || return 1
   oh_desktop_focus "${OH_WINAPPS_TITLE[$app]}" && return 0
-  oh_spawn winapps "$wa"
+  KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "$wa"
 }
 
 # Raise the first desktop Office window whose title matches. A web app with
@@ -510,7 +517,7 @@ oh_desktop_open_file() {
   [[ -n $wa ]] || oh_die "no desktop app for $app"
   [[ $file == "$HOME"/* || $file == /run/media/* ]] ||
     oh_die "desktop Office can open files under $HOME or /run/media only"
-  oh_spawn winapps "$wa" "$file"
+  KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "$wa" "$file"
 }
 
 # The FreeRDP 3 client, the same order oh_desktop_check accepts.
@@ -572,7 +579,7 @@ oh_desktop_run() {
     return 0
   fi
   # printf is a builtin: the password goes into the pipe, never into argv.
-  printf '%s\n' "${OH_WA[RDP_PASS]}" | setsid -f "$rdp" "${args[@]}" >/dev/null 2>&1
+  printf '%s\n' "${OH_WA[RDP_PASS]}" | KRB5_CONFIG=$OH_RDP_KRB5 setsid -f "$rdp" "${args[@]}" >/dev/null 2>&1
 }
 
 # "Open in Windows" in the Files app's Open With list, for Office add-ins.
