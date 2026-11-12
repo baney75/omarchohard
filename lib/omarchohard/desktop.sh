@@ -680,6 +680,14 @@ oh_agent_usable() {
   done
 }
 
+# True when the running agent is the agent.ps1 this omarchohard ships: its
+# beat names the hash of the script it started from.
+oh_agent_current() {
+  local beat
+  beat=$(cat -- "$OH_AGENT_DIR/agent.beat" 2>/dev/null) || return 1
+  [[ ${beat#* } == "$(sha256sum <"$OH_SHARE/vm/agent.ps1" | cut -d' ' -f1)" ]]
+}
+
 # The agent rewrites agent.beat every 2 seconds while it can reach the folder.
 oh_agent_alive() {
   local mtime
@@ -719,7 +727,7 @@ oh_agent_queue() {
 # holder holds the lock, 2 when the holder's FreeRDP ended before the agent
 # beat (a refused certificate, a wrong password), so WinApps can show why.
 oh_agent_start() {
-  local verb=$1 arg=$2 lock start q ps warm i
+  local verb=$1 arg=$2 lock start q ps warm i queued=''
   exec {lock}>"$OH_AGENT_DIR/holder.lock"
   if ! flock -n "$lock"; then
     exec {lock}>&-
@@ -739,7 +747,7 @@ oh_agent_start() {
   esac
   # cmd expands %NAME% even inside quotes; %% is a literal %.
   [[ -z $start || -z $arg ]] || start+=" \"${arg//%/%%}\""
-  [[ -n $start ]] || oh_agent_queue "$verb" "$arg" >/dev/null || return 2
+  [[ -n $start ]] || queued=$(oh_agent_queue "$verb" "$arg") || return 2
   # shellcheck disable=SC1003 # a Windows path ends in a backslash
   q='\\tsclient\home\'${OH_AGENT_DIR#"$HOME"/} ps='\\tsclient\home\'${OH_AGENT_PS1#"$HOME"/}
   mkdir -p "${OH_AGENT_PS1%/*}"
@@ -766,6 +774,8 @@ oh_agent_start() {
     if flock -n "$lock"; then
       exec {lock}>&-
       [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+      # Take a queued request back, so the next agent does not run it.
+      [[ -z $queued ]] || { mv -- "$queued" "$queued.late" 2>/dev/null && rm -f -- "$queued.late"; }
       return 2
     fi
     exec {lock}>&-
@@ -800,16 +810,22 @@ oh_agent_go() {
 # `desktop slim`: shrink the VM's disk with slim.ps1, run by the agent, and
 # print each step as it lands.
 oh_desktop_slim() {
-  local log line n=0 i
+  local name log line n=0 i alog=$OH_AGENT_DIR/agent.log a0
   (($# == 0)) || oh_die "usage: omarchohard desktop slim"
   oh_desktop_ready || oh_die "desktop Office is not set up yet (omarchohard desktop install --wait)"
-  log=$OH_AGENT_DIR/slim.log
+  # An agent started before an upgrade does not know slim; it stops 15
+  # minutes after the last Office window closes.
+  ! oh_agent_alive || oh_agent_current ||
+    oh_die "the agent in Windows is older than this omarchohard; close the desktop Office windows, wait 15 minutes, and run desktop slim again"
+  name=slim-$(date +%s%N).log log=$OH_AGENT_DIR/$name
   mkdir -p "${OH_AGENT_PS1%/*}" "$OH_AGENT_DIR"
   cp -f -- "$OH_SHARE/vm/slim.ps1" "${OH_AGENT_PS1%/*}/slim.ps1"
-  rm -f -- "$log"
-  oh_agent_go slim || oh_die "desktop slim runs through the agent, which needs FreeRDP 3 (omarchy pkg add freerdp) and desktop_agent=on"
-  oh_say "Slimming the Windows VM. Removing old updates can take 30 minutes; Office keeps working meanwhile."
+  a0=$(wc -l <"$alog" 2>/dev/null || echo 0)
+  oh_agent_go slim "$name" || oh_die "desktop slim runs through the agent, which needs FreeRDP 3 (omarchy pkg add freerdp) and desktop_agent=on"
+  oh_say "Slimming the Windows VM. Removing old updates can take 30 minutes."
   for ((i = 0; i < 3600; i++)); do
+    line=$(tail -n +$((a0 + 1)) -- "$alog" 2>/dev/null | grep -m1 'error slim') &&
+      oh_die "Windows refused it: ${line#*error slim}"
     if [[ -f $log ]]; then
       while IFS= read -r line; do
         line=${line#$'\xef\xbb\xbf'}

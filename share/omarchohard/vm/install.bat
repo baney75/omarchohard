@@ -28,8 +28,13 @@ rem A VM never hibernates, so drop hiberfil.sys and the gigabytes it holds.
 powercfg /hibernate off
 
 rem Shrink the disk: apps for home use, update downloads, Office compressed
-rem (21 GB to 16 GB on the test VM). `omarchohard desktop slim` runs it again.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\slim.ps1 -Log C:\OEM\slim.log
+rem (21 GB to 15 GB on the test VM). A SYSTEM task, started now, so the
+rem sign-out and "ready" do not wait for it; it runs again at each start
+rem until it finishes once, then deletes itself. `omarchohard desktop slim`
+rem runs the same script.
+schtasks /Create /F /TN "omarchohard-slim" /SC ONSTART /RU SYSTEM /RL HIGHEST ^
+  /TR "conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OEM\slim.ps1 -Log C:\OEM\slim.log"
+schtasks /Run /TN "omarchohard-slim"
 
 rem 4. Sign out of the console, last. dockur signs the user in automatically
 rem after setup, and while that console session is open a RemoteApp shows

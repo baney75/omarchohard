@@ -15,6 +15,15 @@ param([Parameter(Mandatory)][string]$Log)
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
+# One slim at a time in the whole VM: the first-boot task and
+# `desktop slim` would both be running DISM and compact otherwise.
+$created = $false
+$mutex = New-Object Threading.Mutex($true, 'Global\omarchohard-slim', [ref]$created)
+if (-not $created) {
+  Add-Content -LiteralPath $Log -Encoding UTF8 -Value 'done: a slim is already running in Windows; run desktop slim again once it ends'
+  exit 0
+}
+
 function Write-Step([string]$Text) {
   Add-Content -LiteralPath $Log -Encoding UTF8 -Value $Text
 }
@@ -92,9 +101,16 @@ Write-Step ("old updates: {0:N2} GB freed" -f ($t - (Get-UsedGB)))
 
 $t = Get-UsedGB
 Stop-Service wuauserv, bits -Force -ErrorAction SilentlyContinue
-foreach ($dir in "$env:SystemRoot\SoftwareDistribution\Download", "$env:SystemRoot\Temp", "$env:SystemRoot\Logs\CBS",
-  "$env:SystemDrive\Users\*\AppData\Local\Temp", "${env:ProgramFiles(x86)}\Microsoft\EdgeUpdate\Download") {
+foreach ($dir in "$env:SystemRoot\SoftwareDistribution\Download", "$env:SystemRoot\Logs\CBS",
+  "${env:ProgramFiles(x86)}\Microsoft\EdgeUpdate\Download") {
   Get-ChildItem -Path $dir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+# Temp files a day old or more: an open Office document keeps its working
+# files there.
+$day = (Get-Date).AddDays(-1)
+foreach ($dir in "$env:SystemRoot\Temp", "$env:SystemDrive\Users\*\AppData\Local\Temp") {
+  Get-ChildItem -Path $dir -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -LT $day |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 }
 Start-Service wuauserv -ErrorAction SilentlyContinue
 powercfg /hibernate off
@@ -119,3 +135,6 @@ if ($dir) {
 
 Optimize-Volume -DriveLetter C -ReTrim -ErrorAction SilentlyContinue
 Write-Step ("done: {0:N2} GB used, {1:N2} GB freed" -f (Get-UsedGB), ($start - (Get-UsedGB)))
+# The first-boot task removes itself once it has run to the end.
+schtasks /Delete /TN omarchohard-slim /F 2>$null | Out-Null
+$mutex.ReleaseMutex()

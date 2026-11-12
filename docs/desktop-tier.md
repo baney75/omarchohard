@@ -265,8 +265,9 @@ down and the first boot runs it once Office is in:
 Measured on the test VM (2026-11-12): 21 GB before, 15 GB after, in about
 8 minutes. A cold Word open after a VM boot took 4.95 to 5.25 s after
 compression against 5.03 to 5.33 s before, so compression did not slow it.
-Office keeps working while slim runs. Run it again after big Windows or
-Office updates; Office's updater writes new files uncompressed.
+Run it again after big Windows or Office updates; Office's updater writes
+new files uncompressed. Temp files newer than a day stay, so a document open
+in Office keeps its working files.
 
 ## Updates
 

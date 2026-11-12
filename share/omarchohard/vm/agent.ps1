@@ -14,7 +14,8 @@
 #   run                                     open the file ARG with its Windows program
 #   uri                                     open an ms-word:, ms-excel:,
 #                                           ms-powerpoint: or onenote: link
-#   slim                                    run slim.ps1, hidden
+#   slim                                    run slim.ps1, hidden; ARG is its
+#                                           log's name in the queue folder
 # Files are \\tsclient\home\... or \\tsclient\media\... paths.
 #
 # -Warm names apps to keep started and hidden once Office is signed in, so
@@ -67,8 +68,9 @@ function Invoke-Request([string]$Line) {
     if ($arg -notmatch '^(ms-(word|excel|powerpoint)|onenote):') { throw "refused link: $arg" }
     Start-Process -FilePath $arg
   } elseif ($verb -eq 'slim') {
+    if ($arg -notmatch '^slim-[0-9]+\.log\z') { throw "refused log name: $arg" }
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $PSScriptRoot 'slim.ps1') + '"'),
-      '-Log', ('"' + (Join-Path $Queue 'slim.log') + '"'))
+      '-Log', ('"' + (Join-Path $Queue $arg) + '"'))
     $p = Start-Process -FilePath powershell.exe -ArgumentList $a -WindowStyle Hidden -PassThru
     [void]$jobs.Add($p.Id)
   } elseif ($exe.ContainsKey($verb)) {
@@ -123,6 +125,9 @@ function Test-OfficeInUse {
 }
 
 $beat = Join-Path $Queue 'agent.beat'
+# The beat names this script's hash, so the host can tell an agent started
+# before an upgrade, which does not know newer requests.
+$self = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLower()
 $last = [DateTime]::UtcNow
 $lastBeat = [DateTime]::MinValue
 $lastWarm = [DateTime]::MinValue
@@ -144,7 +149,7 @@ while (([DateTime]::UtcNow - $last).TotalMinutes -lt $IdleMinutes) {
   }
   $now = [DateTime]::UtcNow
   if (($now - $lastBeat).TotalSeconds -ge 2) {
-    try { [IO.File]::WriteAllText($beat, [string]$PID) } catch {}
+    try { [IO.File]::WriteAllText($beat, "$PID $self") } catch {}
     $lastBeat = $now
     if (Test-OfficeInUse) { $last = $now }
   }
