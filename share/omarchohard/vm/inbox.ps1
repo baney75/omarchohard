@@ -127,4 +127,23 @@ if (Test-Path $statusPath) {
   if ($known.phase -eq 'ready' -and ($known.version -ne $now.version -or $known.channel -ne $now.channel)) {
     Write-OfficeStatus 'ready'
   }
+  # A first boot cut short (the VM stopped during the Office install) never
+  # runs the end of install.bat again, so finish it here once neither
+  # install.bat nor office.ps1 is running.
+  if ($known.phase -in 'installing-office', 'installed') {
+    $firstBoot = Get-CimInstance Win32_Process -Filter "Name='cmd.exe' OR Name='powershell.exe'" |
+      Where-Object { $_.CommandLine -match 'install\.bat|office\.ps1' }
+    if (-not $firstBoot) {
+      if ($now.version) {
+        $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        powercfg /hibernate off
+        Set-ItemProperty $winlogon AutoAdminLogon '0'
+        Remove-ItemProperty $winlogon DefaultPassword -ErrorAction SilentlyContinue
+        Write-OfficeStatus 'ready'
+        logoff console 2>$null
+      } else {
+        Write-OfficeStatus 'failed' 'the Office install was interrupted; reinstall with: omarchohard desktop remove --delete-vm, then omarchohard desktop install --wait'
+      }
+    }
+  }
 }

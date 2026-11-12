@@ -358,10 +358,11 @@ oh_desktop_phase() {
       ;;
     esac
   done <<<"$logs"
-  # A VM made before 0.2.0 never writes office-status.json; there, launchers
-  # WinApps registered mean Office was found.
-  if [[ $found == installing-windows ]] && ((OH_RDP_UP)) && oh_desktop_launchers >/dev/null; then
-    found=ready OH_VM_DETAIL="Office launchers are registered"
+  # A VM made before 0.2.0 (its disk in the volume "data") never writes
+  # office-status.json, so there RDP answering means Windows is up. A new VM
+  # always writes it, and RDP answers there long before Office is in.
+  if [[ $found == installing-windows ]] && ((OH_RDP_UP)) && grep -qxF '      - data:/storage' "$OH_VM_DIR/compose.yaml"; then
+    found=ready OH_VM_DETAIL="made before omarchohard 0.2.0; it reports no Office status"
   fi
   OH_VM_PHASE=${found:-downloading-windows}
   [[ -n $found ]] || OH_VM_DETAIL="the VM is starting"
@@ -887,7 +888,7 @@ oh_desktop_doctor() {
   if [[ $OH_VM_STATE == running ]]; then
     if ((OH_RDP_UP)); then
       oh_doc ok "desktop RDP" "${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} answers"
-    elif [[ $OH_VM_PHASE == downloading-windows || $OH_VM_PHASE == installing-windows || $OH_VM_PHASE == starting ]]; then
+    elif [[ $OH_VM_PHASE == downloading-windows || $OH_VM_PHASE == installing-windows || $OH_VM_PHASE == installing-office || $OH_VM_PHASE == starting ]]; then
       oh_doc warn "desktop RDP" "no answer on ${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} yet; Windows is still installing or starting"
     else
       oh_doc fail "desktop RDP" "no answer on ${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]} (restart the VM: omarchohard desktop down, then up)"

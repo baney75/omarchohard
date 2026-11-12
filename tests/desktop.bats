@@ -708,10 +708,38 @@ winapps_launchers() {
   [[ $(check "$output" 'desktop RDP') == "warn no answer on 127.0.0.1:3389 yet"* ]]
   [ "$(check "$output" 'desktop launchers')" = "warn missing Word (omarchohard desktop apps)" ]
   [[ $(check "$output" 'open_with') == "ok web; "* ]]
+  # Mid-install, RDP not answering is expected: warn, never "restart the VM".
+  office_status installing-office
+  run "$OH" doctor --json
+  [[ $(check "$output" 'desktop RDP') == "warn no answer on 127.0.0.1:3389 yet"* ]]
   office_status failed 'setup.exe exited with code 17'
   run "$OH" doctor --json
   [ "$status" -eq 1 ]
   [ "$(check "$output" 'desktop Office')" = "fail did not install: setup.exe exited with code 17" ]
+}
+
+@test "with no status file, RDP up means ready only on a VM made before 0.2.0" {
+  vm_stub
+  rdp_listen
+  stub winapps 'exit 0'
+  winapps_launchers word-o365 excel-o365 powerpoint-o365 outlook-o365 onenote-o365
+  printf '❯ Booting Windows using QEMU v10.1.2...\n' >"$HOME/vm.log"
+  # A new VM, launchers left from an earlier one: Office is not in yet.
+  printf 'services:\n  windows:\n    volumes:\n      - ./storage:/storage\n' >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  [ "$(phase)" = installing-windows ]
+  printf 'services:\n  windows:\n    volumes:\n      - data:/storage\n' >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  [ "$(phase)" = ready ]
+}
+
+@test "the inbox task finishes a first boot that was cut short" {
+  local ps=$BATS_TEST_DIRNAME/../share/omarchohard/vm/inbox.ps1
+  grep -qF "if (\$known.phase -in 'installing-office', 'installed') {" "$ps"
+  grep -qF "Where-Object { \$_.CommandLine -match 'install\\.bat|office\\.ps1' }" "$ps"
+  grep -qF "Set-ItemProperty \$winlogon AutoAdminLogon '0'" "$ps"
+  grep -qF "Remove-ItemProperty \$winlogon DefaultPassword" "$ps"
+  grep -qF "Write-OfficeStatus 'failed' 'the Office install was interrupted" "$ps"
+  # ready before the console sign-out, as in install.bat.
+  [ "$(grep -nF "Write-OfficeStatus 'ready'" "$ps" | tail -n1 | cut -d: -f1)" -lt "$(grep -nF 'logoff console' "$ps" | cut -d: -f1)" ]
 }
 
 @test "a reinstall after remove --delete-vm starts fresh: no stale status, and setup sees no VM" {
