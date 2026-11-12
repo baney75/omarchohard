@@ -415,7 +415,7 @@ container; see `make lint test container`):
   `onedrive sync` against a stub rclone socket; and, for desktop Office with
   stub Docker and FreeRDP: the no-COW storage folder on btrfs, install phases
   read from the VM log and `office-status.json`, `install --wait` through
-  Ctrl-C, launch-or-focus by window class, `desktop run` path checks with
+  Ctrl-C, launch-or-focus by window title, `desktop run` path checks with
   the password on stdin and never on the command line, the update allowlists,
   the doctor rows, the first-boot script (hidden task windows, the console
   signed out after Office), the Hyprland rules added and removed by one line,

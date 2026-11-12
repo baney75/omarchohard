@@ -2,7 +2,8 @@
 # Microsoft's CDN. The product comes from office-product.txt (set by
 # `omarchohard desktop install --office ...`). Progress goes to
 # office-status.json in the shared inbox, which `omarchohard desktop status`
-# reads: installing-office, then ready or failed with the reason.
+# reads: installing-office, then installed (install.bat marks ready after the
+# console sign-out) or failed with the reason.
 $ErrorActionPreference = 'Stop'
 . C:\OEM\office-info.ps1
 $product = (Get-Content C:\OEM\office-product.txt -Raw).Trim()
@@ -59,5 +60,6 @@ $setup = Start-Process -Wait -PassThru -FilePath "$work\setup.exe" -ArgumentList
 if ($setup.ExitCode -ne 0) { throw "setup.exe exited with code $($setup.ExitCode)" }
 if (-not (Get-OfficeInfo).version) { throw 'setup.exe finished, but Office is not installed' }
 
-Write-OfficeStatus 'ready'
+# install.bat says ready once Windows has signed out of its console.
+Write-OfficeStatus 'installed'
 Write-Output "office: installed $product on channel $channel"

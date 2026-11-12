@@ -110,6 +110,13 @@ fake_vm() {
   # request, so the SMB client cache is off before anything opens the share.
   smb=$(grep -n 'Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force' "$bat" | cut -d: -f1)
   [ -n "$smb" ] && [ "$smb" -lt "$office" ]
+  # Ready is written only after automatic sign-in is off, right before the
+  # sign-out, so desktop wait never adds the apps while the console holds
+  # the session; office.ps1 itself says only "installed".
+  ready=$(grep -n "Write-OfficeStatus 'ready'" "$bat" | cut -d: -f1)
+  [ -n "$ready" ] && [ "$reg" -lt "$ready" ] && [ "$ready" -eq $(($(wc -l <"$bat") - 1)) ]
+  grep -qxF "Write-OfficeStatus 'installed'" "$BATS_TEST_DIRNAME/../share/omarchohard/vm/office.ps1"
+  [ "$(grep -cF "Write-OfficeStatus 'ready'" "$BATS_TEST_DIRNAME/../share/omarchohard/vm/office.ps1")" -eq 0 ]
   # Signing out is the last thing it does.
   [ "$(tail -n 1 "$bat")" = 'shutdown /l /f' ]
 }
@@ -120,11 +127,15 @@ fake_vm() {
   office_status ready
   wa=$XDG_DATA_HOME/omarchohard/winapps
   mkdir -p "$wa"
-  printf '#!/bin/sh\necho "REMOTE DESKTOP PROTOCOL FAILURE"\nexit 14\n' >"$wa/setup.sh"
+  # shellcheck disable=SC2016 # $HOME is for the stub's shell
+  printf '#!/bin/sh\necho try >>"$HOME/setup.tries"\necho "REMOTE DESKTOP PROTOCOL FAILURE"\nexit 14\n' >"$wa/setup.sh"
   chmod +x "$wa/setup.sh"
+  export OMARCHOHARD_DESKTOP_POLL=0
   run "$OH" desktop wait
   [ "$status" -eq 1 ]
   [[ $output == *"sign out of Windows once at http://127.0.0.1:8006 (Start, your name, Sign out)"* ]]
+  # The console signs out a moment after Office is ready: three tries first.
+  [ "$(wc -l <"$HOME/setup.tries")" -eq 3 ]
   # Any other failure gets no such advice.
   printf '#!/bin/sh\nexit 5\n' >"$wa/setup.sh"
   run "$OH" desktop wait
@@ -246,6 +257,9 @@ teardown() {
   [ "$(phase)" = installing-windows ]
   office_status installing-office
   [ "$(phase)" = installing-office ]
+  office_status installed
+  [ "$(phase)" = installing-office ]
+  [[ $("$OH" desktop status --json | jq -r .detail) == *"finishing its first start"* ]]
   office_status ready
   [ "$(phase)" = starting ]
   # Docker's proxy takes the connection before Windows listens: not ready.
@@ -480,6 +494,10 @@ freerdp_stub() {
   run "$OH" desktop run "$bad"
   [ "$status" -eq 1 ]
   [[ $output == *"control character"* ]]
+  : >"$HOME/Budget, 2026.xlam"
+  run "$OH" desktop run "$HOME/Budget, 2026.xlam"
+  [ "$status" -eq 1 ]
+  [[ $output == *"comma"* ]]
   ln -s /etc/hostname "$HOME/link.txt"
   run "$OH" desktop run "$HOME/link.txt"
   [ "$status" -eq 1 ]
@@ -615,6 +633,17 @@ winapps_setup_stub() {
   [ -z "$(ls -A "$INBOX")" ]
 }
 
+@test "only Microsoft 365 changes channel; other editions are refused, and the VM checks the change took" {
+  vm_stub
+  mkdir -p "$XDG_CONFIG_HOME/omarchohard"
+  printf 'desktop_office=2024\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  run "$OH" desktop update --channel monthly
+  [ "$status" -eq 1 ]
+  [[ $output == *"only Microsoft 365"* ]]
+  [ -z "$(ls -A "$INBOX")" ]
+  grep -qF 'channel not changed: this Office edition stays on its own channel' "$BATS_TEST_DIRNAME/../share/omarchohard/vm/inbox.ps1"
+}
+
 # shellcheck disable=SC2016 # PowerShell's own $ in the expected text
 @test "the VM updates Office only on an allowed channel and version, and installs it with updates on" {
   ps=$BATS_TEST_DIRNAME/../share/omarchohard/vm
@@ -683,4 +712,20 @@ winapps_launchers() {
   run "$OH" doctor --json
   [ "$status" -eq 1 ]
   [ "$(check "$output" 'desktop Office')" = "fail did not install: setup.exe exited with code 17" ]
+}
+
+@test "a reinstall after remove --delete-vm starts fresh: no stale status, and setup sees no VM" {
+  vm_stub
+  office_status failed 'setup.exe exited with code 17'
+  # remove --delete-vm asks in a terminal; script(1) gives it one.
+  command -v script >/dev/null || skip "script(1) is not installed"
+  printf 'DELETE\n' | script -qec "$OH desktop remove --delete-vm" /dev/null >/dev/null 2>&1
+  [ ! -e "$INBOX/office-status.json" ]
+  [ ! -e "$XDG_DATA_HOME/omarchohard/vm/compose.yaml" ]
+  # A status file left beside an empty disk folder goes on install too.
+  office_status failed 'old'
+  install_stubs
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  [ ! -e "$INBOX/office-status.json" ]
 }

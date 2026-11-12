@@ -20,7 +20,7 @@ rem not trust a cached listing of it: without this the inbox task never sees
 rem a request from omarchohard desktop update or activate.
 powershell.exe -NoProfile -Command "Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force"
 
-rem 3. Microsoft Office from Microsoft's CDN. office.ps1 writes "ready" (or
+rem 3. Microsoft Office from Microsoft's CDN. office.ps1 writes "installed" (or
 rem "failed") to office-status.json before it returns.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\office.ps1 > C:\OEM\office.log 2>&1
 
@@ -34,4 +34,6 @@ rem off, so the next boot leaves the session free for RemoteApp.
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f
 rem Automatic sign-in kept the password in plain text here; it is not needed now.
 reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f
+rem Ready only now, so omarchohard adds the apps after the console is free.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". C:\OEM\office-info.ps1; if ((Get-OfficeInfo).version) { Write-OfficeStatus 'ready' }"
 shutdown /l /f

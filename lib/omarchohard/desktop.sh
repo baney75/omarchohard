@@ -253,6 +253,9 @@ EOF
     tpl=${tpl/$'\nservices:'/$'\nvolumes:\n  data:\nservices:'}
     oh_dim "keeping the VM disk in its docker volume (made before omarchohard 0.2.0)"
   else
+    # A new disk: a status file left from an earlier VM would say "failed"
+    # or "ready" before this Windows has even started.
+    [[ -e $OH_VM_DIR/storage/data.img ]] || rm -f -- "$OH_OFFICE_STATUS"
     oh_desktop_storage
   fi
   (
@@ -327,6 +330,10 @@ oh_desktop_phase() {
     OH_VM_PHASE=installing-office OH_VM_DETAIL="Office is downloading and installing in the VM"
     return 0
     ;;
+  installed)
+    OH_VM_PHASE=installing-office OH_VM_DETAIL="Office is installed; Windows is finishing its first start"
+    return 0
+    ;;
   ready)
     if ((OH_RDP_UP)); then
       OH_VM_PHASE=ready OH_VM_DETAIL="${OH_OFFICE_VERSION:+Office $OH_OFFICE_VERSION}"
@@ -387,7 +394,7 @@ oh_desktop_office_load() {
   [[ -f $OH_OFFICE_STATUS ]] || return 1
   mapfile -t f < <(jq -r '[.phase, .product, .version, .channel, .error] | .[] | (. // "") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:300]' "$OH_OFFICE_STATUS" 2>/dev/null)
   ((${#f[@]} == 5)) || return 1
-  case ${f[0]} in installing-office | ready | failed) OH_OFFICE_PHASE=${f[0]} ;; esac
+  case ${f[0]} in installing-office | installed | ready | failed) OH_OFFICE_PHASE=${f[0]} ;; esac
   OH_OFFICE_PRODUCT=${f[1]} OH_OFFICE_VERSION=${f[2]} OH_OFFICE_CHANNEL=${f[3]} OH_OFFICE_ERROR=${f[4]}
 }
 
@@ -458,8 +465,16 @@ oh_desktop_wait() {
 # VM installed before 0.2.0 means Windows is still signed in at its console:
 # a RemoteApp then shows "Another user is signed in" instead of the app.
 oh_winapps_setup() {
-  local rc=0
-  (cd "$OH_WINAPPS_DIR" && KRB5_CONFIG=$OH_RDP_KRB5 oh_run ./setup.sh "$@") || rc=$?
+  local rc try
+  # The first boot signs Windows out of its console a moment after Office
+  # reports ready, so a first exit 14 gets two more tries.
+  for try in 1 2 3; do
+    rc=0
+    (cd "$OH_WINAPPS_DIR" && KRB5_CONFIG=$OH_RDP_KRB5 oh_run ./setup.sh "$@") || rc=$?
+    ((rc == 14 && try < 3)) || break
+    oh_dim "RDP is not ready yet; trying again..."
+    sleep "${OMARCHOHARD_DESKTOP_POLL:-15}"
+  done
   ((rc != 14)) ||
     oh_warn "WinApps could not open an app over RDP. If Windows is signed in on its own screen, sign out of Windows once at http://127.0.0.1:8006 (Start, your name, Sign out), then run: omarchohard desktop apps"
   return "$rc"
@@ -565,6 +580,8 @@ oh_desktop_run() {
   esac
   # Windows file names cannot hold ", and it would end the cmd: value early.
   [[ $abs != *\"* ]] || oh_die "Windows cannot open a path with \" in it: $abs"
+  # FreeRDP splits /app: at commas, even inside the quotes.
+  [[ $abs != *,* ]] || oh_die "Windows cannot open a path with a comma in it yet; rename it or move it: $abs"
   win=${win//\//\\}
   rdp=$(oh_desktop_freerdp) || oh_die "FreeRDP 3 is missing: omarchy pkg add freerdp"
   oh_winapps_conf_load || oh_die "run omarchohard desktop install first"
@@ -768,7 +785,7 @@ oh_desktop_activate() {
 # channel when asked, and a Windows Update scan. The answer is JSON with
 # Office's version, channel and a message.
 oh_desktop_update() {
-  local channel='' to='' extra=''
+  local channel='' to='' extra='' office
   while (($#)); do
     case $1 in
     --channel)
@@ -784,6 +801,12 @@ oh_desktop_update() {
     shift
   done
   [[ -z $channel || -n ${OH_OFFICE_CHANNELS[$channel]:-} ]] || oh_die "--channel must be current, monthly or semi-annual"
+  # Monthly and semi-annual channels exist for Microsoft 365 Apps for business
+  # and enterprise only; other editions stay on the channel they came with.
+  oh_config_load
+  office=$(oh_config_get desktop_office)
+  [[ -z $channel || -z $office || $office == m365 ]] ||
+    oh_die "only Microsoft 365 (--office m365) can change channel; this VM has $office"
   [[ -z $to || $to =~ ^[0-9]+(\.[0-9]+){3}$ ]] || oh_die "--to needs an Office version like 16.0.19328.20100"
   [[ -f $OH_VM_DIR/compose.yaml ]] || oh_die "run omarchohard desktop install first"
   [[ -z $to ]] || extra+=",\"version\":\"$to\""
@@ -821,6 +844,9 @@ oh_desktop_remove() {
     read -r -p "This deletes the Windows VM disk and everything in it. Type DELETE to confirm: " answer
     [[ $answer == DELETE ]] || oh_die "not deleted"
     oh_desktop_compose down -v
+    # A reinstall starts from nothing: no old "failed" or "ready" status, and
+    # no compose.yaml, which setup reads as "desktop Office is installed".
+    rm -f -- "$OH_OFFICE_STATUS" "$OH_VM_DIR/compose.yaml"
     # The disk folder of an install made since 0.2.0. Windows' files in it
     # belong to the container's root user, but the folder is yours.
     oh_run rm -rf -- "$OH_VM_DIR/storage" 2>/dev/null ||

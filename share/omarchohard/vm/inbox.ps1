@@ -105,6 +105,10 @@ Get-ChildItem -Path $inbox -Filter '*.request' | ForEach-Object {
         if ($req.version -and "$($req.version)" -notmatch $versionPattern) { $out = Format-UpdateResult 'rejected: malformed version'; break }
         if (-not (Test-Path $c2r)) { $out = Format-UpdateResult 'Office is not installed yet'; break }
         Start-Process -Wait -FilePath $c2r -ArgumentList '/changesetting', "Channel=$($req.channel)"
+        # Editions other than Microsoft 365 Apps ignore the change; say so.
+        $set = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration' -ErrorAction SilentlyContinue).UpdateChannel
+        $id = ($OfficeChannelIds.GetEnumerator() | Where-Object { $_.Value -eq "$($req.channel)" } | Select-Object -First 1).Key
+        if (-not $id -or "$set" -notlike "*$id*") { $out = Format-UpdateResult "channel not changed: this Office edition stays on its own channel"; break }
         $out = Format-UpdateResult ("channel set to $($req.channel); " + (Start-Update "$($req.version)"))
       }
       default { $out = "unknown action: $($req.action)" }
