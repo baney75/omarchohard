@@ -87,11 +87,12 @@ oh_desktop_compose() {
 declare -gA OH_WA=()
 oh_winapps_conf_load() {
   local line key value
-  OH_WA=([RDP_USER]=omarchohard [RDP_PASS]='' [RDP_DOMAIN]='' [RDP_IP]=127.0.0.1 [RDP_PORT]=3389)
+  OH_WA=([RDP_USER]=omarchohard [RDP_PASS]='' [RDP_DOMAIN]='' [RDP_IP]=127.0.0.1 [RDP_PORT]=3389
+    [RDP_FLAGS]='/cert:tofu /sound /microphone +home-drive' [RDP_SCALE]=100 [AUTOPAUSE]=off [AUTOPAUSE_TIME]=300)
   [[ -f $OH_WINAPPS_CONF ]] || return 1
   while IFS= read -r line || [[ -n $line ]]; do
     case $line in
-    RDP_USER=\"*\" | RDP_PASS=\"*\" | RDP_DOMAIN=\"*\" | RDP_IP=\"*\" | RDP_PORT=\"*\")
+    RDP_USER=\"*\" | RDP_PASS=\"*\" | RDP_DOMAIN=\"*\" | RDP_IP=\"*\" | RDP_PORT=\"*\" | RDP_FLAGS=\"*\" | RDP_SCALE=\"*\" | AUTOPAUSE=\"*\" | AUTOPAUSE_TIME=\"*\")
       key=${line%%=*} value=${line#*=\"} value=${value%\"}
       OH_WA[$key]=$value
       ;;
@@ -217,7 +218,7 @@ RDP_DOMAIN=""
 RDP_IP="127.0.0.1"
 VM_NAME="WinApps"
 WAFLAVOR="$engine"
-RDP_SCALE="100"
+RDP_SCALE="$(oh_desktop_scale)"
 REMOVABLE_MEDIA="/run/media"
 RDP_FLAGS="/cert:tofu /sound /microphone +home-drive"
 DEBUG="true"
@@ -481,11 +482,31 @@ oh_winapps_setup() {
   return "$rc"
 }
 
+# WinApps' own menu entries start a new RDP connection each; point them at
+# `omarchohard desktop open`, so they go through the agent like the rest.
+# Only the Exec line changes: icons, names and file types stay WinApps'.
+oh_desktop_entries_route() {
+  local app f exec line tmp
+  exec=$(oh_desktop_exec_arg "$(oh_bin_path)")
+  for app in "${!OH_WINAPPS_APP[@]}"; do
+    f=$OH_APPS_DIR/${OH_WINAPPS_APP[$app]}.desktop
+    [[ -f $f ]] || continue
+    tmp=$(mktemp "$f.XXXXXX")
+    while IFS= read -r line || [[ -n $line ]]; do
+      [[ $line == Exec=* ]] && line="Exec=$exec desktop open $app %F"
+      printf '%s\n' "$line"
+    done <"$f" >"$tmp"
+    chmod --reference="$f" -- "$tmp"
+    mv -- "$tmp" "$f"
+  done
+}
+
 oh_desktop_register() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "Adding Word, Excel, PowerPoint, Outlook and OneNote to the launcher..."
   oh_winapps_setup --user --setupAllOfficiallySupportedApps ||
     oh_die "WinApps could not add the apps; try again with: omarchohard desktop apps"
+  oh_desktop_entries_route
   oh_desktop_addin_entry_write
   oh_desktop_hypr_write
   oh_refresh_desktop_db
@@ -497,6 +518,7 @@ oh_desktop_apps() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "WinApps now scans the VM and lists the apps it found. Choose the Office apps."
   oh_winapps_setup --user || oh_die "WinApps did not finish; run omarchohard desktop apps again"
+  oh_desktop_entries_route
   oh_desktop_addin_entry_write
   oh_desktop_hypr_write
   oh_refresh_desktop_db
@@ -516,6 +538,7 @@ oh_desktop_launch() {
   local app=$1 wa=${OH_WINAPPS_APP[$1]:-}
   [[ -n $wa && $(oh_config_get open_with) == desktop ]] && oh_desktop_ready || return 1
   oh_desktop_focus "${OH_WINAPPS_TITLE[$app]}" && return 0
+  oh_agent_go "$app" && return 0
   KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "$wa"
 }
 
@@ -536,7 +559,29 @@ oh_desktop_open_file() {
   [[ -n $wa ]] || oh_die "no desktop app for $app"
   [[ $file == "$HOME"/* || $file == /run/media/* ]] ||
     oh_die "desktop Office can open files under $HOME or /run/media only"
+  oh_agent_go "$app" "$(oh_desktop_win_path "$file")" && return 0
   KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "$wa" "$file"
+}
+
+# `desktop open APP [FILE...]`: always desktop Office, whatever open_with
+# says. WinApps' own launchers point here, so they use the agent too.
+oh_desktop_open() {
+  local app=${1:-} file abs
+  [[ -n ${OH_WINAPPS_APP[$app]:-} ]] || oh_die "usage: omarchohard desktop open word|excel|powerpoint|outlook|onenote [FILE...]"
+  shift
+  oh_desktop_ready || oh_die "desktop Office is not set up yet (omarchohard desktop install --wait)"
+  if (($# == 0)); then
+    oh_desktop_focus "${OH_WINAPPS_TITLE[$app]}" && return 0
+    oh_agent_go "$app" && return 0
+    KRB5_CONFIG=$OH_RDP_KRB5 oh_spawn winapps "${OH_WINAPPS_APP[$app]}"
+    return 0
+  fi
+  for file in "$@"; do
+    [[ $file != file://* ]] || file=$(oh_file_uri_path "$file")
+    [[ -e $file ]] || oh_die "no such file: $file"
+    abs=$(readlink -f -- "$file")
+    oh_desktop_open_file "$app" "$abs"
+  done
 }
 
 # The FreeRDP 3 client, the same order oh_desktop_check accepts.
@@ -557,7 +602,10 @@ oh_desktop_resume() {
   case ${state%% *} in
   running) ;;
   paused) oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null ;;
-  *) oh_die "the Windows VM is $state; start it with: omarchohard desktop up" ;;
+  *)
+    [[ ${1:-} != --try ]] || return 1
+    oh_die "the Windows VM is $state; start it with: omarchohard desktop up"
+    ;;
   esac
 }
 
@@ -573,17 +621,13 @@ oh_desktop_run() {
   [[ -e $file ]] || oh_die "no such file: $file"
   abs=$(readlink -f -- "$file")
   oh_require_line "$abs" "the file's full path" "open it in Windows"
-  # shellcheck disable=SC1003 # a Windows path ends in a backslash
-  case $abs in
-  "$HOME"/*) win='\\tsclient\home\'${abs#"$HOME"/} ;;
-  /run/media/*) win='\\tsclient\media\'${abs#/run/media/} ;;
-  *) oh_die "Windows can open files under $HOME or /run/media only" ;;
-  esac
+  win=$(oh_desktop_win_path "$abs") || oh_die "Windows can open files under $HOME or /run/media only"
   # Windows file names cannot hold ", and it would end the cmd: value early.
   [[ $abs != *\"* ]] || oh_die "Windows cannot open a path with \" in it: $abs"
-  # FreeRDP splits /app: at commas, even inside the quotes.
-  [[ $abs != *,* ]] || oh_die "Windows cannot open a path with a comma in it yet; rename it or move it: $abs"
-  win=${win//\//\\}
+  oh_agent_go run "$win" && return 0
+  # Without the agent it goes in FreeRDP's /app:, which splits at commas,
+  # even inside the quotes.
+  [[ $abs != *,* ]] || oh_die "Windows cannot open a path with a comma in it without the agent; rename it or move it: $abs"
   rdp=$(oh_desktop_freerdp) || oh_die "FreeRDP 3 is missing: omarchy pkg add freerdp"
   oh_winapps_conf_load || oh_die "run omarchohard desktop install first"
   oh_desktop_resume
@@ -601,6 +645,216 @@ oh_desktop_run() {
   fi
   # printf is a builtin: the password goes into the pipe, never into argv.
   printf '%s\n' "${OH_WA[RDP_PASS]}" | KRB5_CONFIG=$OH_RDP_KRB5 setsid -f "$rdp" "${args[@]}" >/dev/null 2>&1
+}
+
+# The \\tsclient path Windows reaches a file under ~ or /run/media by.
+oh_desktop_win_path() {
+  local win
+  # shellcheck disable=SC1003 # a Windows path ends in a backslash
+  case $1 in
+  "$HOME"/*) win='\\tsclient\home\'${1#"$HOME"/} ;;
+  /run/media/*) win='\\tsclient\media\'${1#/run/media/} ;;
+  *) return 1 ;;
+  esac
+  printf '%s\n' "${win//\//\\}"
+}
+
+# The warm agent, share/omarchohard/vm/agent.ps1. One hidden FreeRDP
+# RemoteApp connection, the holder, runs it in the Windows session. Opening
+# an app or a file is then a request file in $OH_AGENT_DIR that the agent
+# takes within a tenth of a second, with no RDP handshake, and the window
+# shows through that same connection. Measured on the test VM, 2026-11-12:
+# Word with a file 1.2 s through the agent and 2.1 s through WinApps, 0.24 s
+# once the agent keeps Word warm. desktop_agent=off in the config goes back
+# to WinApps for every launch.
+OH_AGENT_DIR=$OH_STATE_DIR/agent
+OH_AGENT_PS1=$OH_DATA_DIR/vm/agent.ps1
+
+# Windows reaches the agent's files only through \\tsclient\home, and their
+# paths go in FreeRDP's /app: and in a .cmd line, so they must be plain.
+oh_agent_usable() {
+  local rel
+  [[ $(oh_config_get desktop_agent) != off ]] && oh_desktop_freerdp >/dev/null && oh_have flock || return 1
+  for rel in "${OH_AGENT_DIR#"$HOME"/}" "${OH_AGENT_PS1#"$HOME"/}"; do
+    [[ $rel != /* && $rel =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+  done
+}
+
+# The agent rewrites agent.beat every 2 seconds while it can reach the folder.
+oh_agent_alive() {
+  local mtime
+  mtime=$(stat -c %Y -- "$OH_AGENT_DIR/agent.beat" 2>/dev/null) || return 1
+  (($(date +%s) - mtime <= 6))
+}
+
+# Queue one request and wait up to TENTHS tenths of a second for the agent
+# to take it. The agent claims a request by renaming it, so a request taken
+# back here by the same rename can never also run.
+oh_agent_send() {
+  local verb=$1 arg=$2 tenths=$3 f i
+  f=$OH_AGENT_DIR/$(date +%s%N)-$$.go
+  (
+    umask 077
+    printf '%s\t%s\n' "$verb" "$arg" >"$f.tmp"
+  ) && mv -- "$f.tmp" "$f" || return 1
+  for ((i = 0; i < tenths; i++)); do
+    [[ -e $f ]] || return 0
+    sleep 0.1
+  done
+  mv -- "$f" "$f.late" 2>/dev/null || return 0
+  rm -f -- "$f.late"
+  return 1
+}
+
+# Start the holder with the first request in first.cmd. The app starts at
+# once and the agent after it in the same hidden console, so the first
+# window does not wait for PowerShell (2.0 s against 4.0 s, measured).
+# Waits for the agent's first beat, up to 30 s. Returns 1 when another
+# holder holds the lock, 2 when the holder's FreeRDP ended before the agent
+# beat (a refused certificate, a wrong password), so WinApps can show why.
+oh_agent_start() {
+  local verb=$1 arg=$2 lock start q ps warm i
+  exec {lock}>"$OH_AGENT_DIR/holder.lock"
+  if ! flock -n "$lock"; then
+    exec {lock}>&-
+    return 1
+  fi
+  case $verb in
+  word) start='start "" winword' ;;
+  excel) start='start "" excel' ;;
+  powerpoint) start='start "" powerpnt' ;;
+  outlook) start='start "" outlook' ;;
+  onenote) start='start "" onenote' ;;
+  # start runs a .bat with cmd /K, which leaves its window open; explorer
+  # opens a file the way the agent's Start-Process does.
+  run) start='explorer.exe' ;;
+  *) start='start ""' ;;
+  esac
+  # cmd expands %NAME% even inside quotes; %% is a literal %.
+  [[ -z $arg ]] || start+=" \"${arg//%/%%}\""
+  # shellcheck disable=SC1003 # a Windows path ends in a backslash
+  q='\\tsclient\home\'${OH_AGENT_DIR#"$HOME"/} ps='\\tsclient\home\'${OH_AGENT_PS1#"$HOME"/}
+  mkdir -p "${OH_AGENT_PS1%/*}"
+  cp -f -- "$OH_SHARE/vm/agent.ps1" "$OH_AGENT_PS1"
+  rm -f -- "$OH_AGENT_DIR/agent.beat"
+  # Windows PowerShell drops an empty quoted argument, so no warm apps means
+  # no -Warm at all.
+  warm=$(oh_config_get desktop_warm | tr -cd 'a-z,')
+  [[ -z $warm ]] || warm=" -Warm \"$warm\""
+  {
+    printf '@echo off\r\nchcp 65001 >nul\r\n%s\r\n' "$start"
+    printf 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s" -Queue "%s"%s\r\n' \
+      "${ps//\//\\}" "${q//\//\\}" "$warm"
+  } >"$OH_AGENT_DIR/first.cmd"
+  # The holder keeps its copy of the lock; printf is a builtin, so the
+  # password goes into the pipe, never into an argument list.
+  printf '%s\n' "${OH_WA[RDP_PASS]}" | OH_HOLDER_LOCK=$lock setsid -f "$(oh_bin_path)" desktop holder >/dev/null 2>&1
+  exec {lock}>&-
+  # The holder lets go of the lock when FreeRDP ends.
+  for ((i = 0; i < 300; i++)); do
+    [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+    exec {lock}>"$OH_AGENT_DIR/holder.lock"
+    if flock -n "$lock"; then
+      exec {lock}>&-
+      [[ -e $OH_AGENT_DIR/agent.beat ]] && return 0
+      return 2
+    fi
+    exec {lock}>&-
+    sleep 0.1
+  done
+}
+
+# Open VERB [ARG] through the agent: hand it over when the agent is up, or
+# start the holder with it. Returns 1 when the caller should use WinApps.
+oh_agent_go() {
+  local verb=$1 arg=${2:-}
+  oh_agent_usable || return 1
+  [[ $arg != *[$'\t\n\r"']* ]] || return 1
+  oh_winapps_conf_load || return 1
+  mkdir -p "$OH_AGENT_DIR"
+  chmod 700 "$OH_AGENT_DIR"
+  if oh_agent_alive; then
+    oh_agent_send "$verb" "$arg" 30 && return 0
+  fi
+  # No beat: the VM may be paused, with the holder's connection waiting.
+  # A stopped VM goes to WinApps, which says so.
+  oh_desktop_resume --try || return 1
+  oh_agent_start "$verb" "$arg"
+  case $? in
+  0) return 0 ;;
+  2) return 1 ;;
+  esac
+  # A holder is starting: its agent takes the request once it is up.
+  oh_agent_send "$verb" "$arg" 100
+}
+
+# The scale of the focused monitor in percent, for FreeRDP's /scale-desktop.
+# Omarchy has XWayland draw at the monitor's own pixels
+# (xwayland:force_zero_scaling), so Windows has to scale itself; without
+# that setting Hyprland scales the window and Windows stays at 100.
+oh_desktop_scale() {
+  local s
+  oh_have hyprctl && oh_have jq || {
+    echo 100
+    return
+  }
+  [[ $(hyprctl getoption xwayland:force_zero_scaling -j 2>/dev/null | jq -r '.int // .bool // 0' 2>/dev/null) =~ ^(1|true)$ ]] || {
+    echo 100
+    return
+  }
+  s=$(hyprctl monitors -j 2>/dev/null | jq -r 'first(.[] | select(.focused)) | .scale' 2>/dev/null) || s=''
+  [[ $s =~ ^[0-9]+(\.[0-9]+)?$ ]] || s=1
+  awk -v s="$s" 'BEGIN { v = int(s * 100 + 0.5); print (v < 100 ? 100 : v > 500 ? 500 : v) }'
+}
+
+# Keep RDP_SCALE in winapps.conf at the monitor's scale, so a WinApps launch
+# draws at the same size. Only omarchohard's own winapps.conf is touched.
+oh_winapps_scale_sync() {
+  local scale=$1
+  [[ -f $OH_WINAPPS_CONF && ${OH_WA[RDP_SCALE]} != "$scale" ]] || return 0
+  head -n1 "$OH_WINAPPS_CONF" | grep -qF 'Written by omarchohard' || return 0
+  sed -i "s/^RDP_SCALE=.*/RDP_SCALE=\"$scale\"/" "$OH_WINAPPS_CONF"
+}
+
+# `desktop holder`, started by oh_agent_start with the password on stdin and
+# the holder lock on descriptor $OH_HOLDER_LOCK. Runs FreeRDP until the
+# Windows session ends, then pauses the idle VM as WinApps' autopause does.
+oh_desktop_holder() {
+  local pass rdp pid scale cproc first f lk
+  local -a args flags
+  IFS= read -r pass || exit 1
+  oh_winapps_conf_load || exit 1
+  rdp=$(oh_desktop_freerdp) || exit 1
+  scale=$(oh_desktop_scale)
+  oh_winapps_scale_sync "$scale"
+  read -r -a flags <<<"${OH_WA[RDP_FLAGS]}"
+  args=("/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}" "/u:${OH_WA[RDP_USER]}")
+  [[ -z ${OH_WA[RDP_DOMAIN]} ]] || args+=("/d:${OH_WA[RDP_DOMAIN]}")
+  args+=(/from-stdin:force "${flags[@]}" +clipboard "/scale-desktop:$scale"
+    "/scale-device:$((scale <= 120 ? 100 : scale <= 160 ? 140 : 180))")
+  [[ -d /run/media ]] && args+=("/drive:media,/run/media")
+  # shellcheck disable=SC1003 # a Windows path ends in a backslash
+  first='\\tsclient\home\'${OH_AGENT_DIR#"$HOME"/}/first.cmd
+  args+=("/wm-class:Microsoft Windows" "/app:program:C:\\Windows\\System32\\conhost.exe,name:omarchohard,cmd:--headless cmd.exe /c ${first//\//\\}")
+  printf '%s\n' "$pass" | KRB5_CONFIG=$OH_RDP_KRB5 "$rdp" "${args[@]}" >"$OH_AGENT_DIR/holder.log" 2>&1 &
+  pid=$!
+  pass=''
+  # WinApps' autopause pauses the VM only while no FreeRDP it knows of runs.
+  cproc=$HOME/.local/share/winapps/FreeRDP_Process_$pid.cproc
+  mkdir -p "${cproc%/*}" && : >"$cproc"
+  wait "$pid" || true
+  rm -f -- "$cproc" "$OH_AGENT_DIR/agent.beat"
+  [[ -z ${OH_HOLDER_LOCK:-} ]] || exec {OH_HOLDER_LOCK}>&-
+  [[ ${OH_WA[AUTOPAUSE]} == on && ${OH_WA[AUTOPAUSE_TIME]} =~ ^[0-9]+$ ]] || return 0
+  sleep "${OH_WA[AUTOPAUSE_TIME]}"
+  exec {lk}>"$OH_AGENT_DIR/holder.lock"
+  flock -n "$lk" || return 0
+  for f in "$HOME"/.local/share/winapps/FreeRDP_Process_*.cproc; do
+    [[ -e $f ]] || continue
+    f=${f##*_} f=${f%.cproc}
+    [[ $f =~ ^[0-9]+$ && $(cat "/proc/$f/comm" 2>/dev/null) == *freerdp* ]] && return 0
+  done
+  oh_desktop_compose pause >/dev/null 2>&1 || true
 }
 
 # "Open in Windows" in the Files app's Open With list, for Office add-ins.
@@ -946,9 +1200,11 @@ oh_desktop() {
   apps) oh_desktop_apps ;;
   activate) oh_desktop_activate "$@" ;;
   run) oh_desktop_run "$@" ;;
+  open) oh_desktop_open "$@" ;;
+  holder) oh_desktop_holder ;;
   update) oh_desktop_update "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|run|update|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|open|run|update|activate|prefer|remove" ;;
   esac
 }

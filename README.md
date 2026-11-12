@@ -371,10 +371,13 @@ omarchohard desktop update           # update Office and Windows now
 It needs KVM, Docker or Podman, FreeRDP 3, at least 16 GiB of RAM (6 GiB free
 when you start it) and about 80 GB of disk.
 
-Measured on one machine (2026-11-12: dockur 6.06, Windows 11 Enterprise
-evaluation, Microsoft 365 Apps, FreeRDP 3.33.1, Hyprland 0.57): a Word window
-appeared 1.8 s after launch on the first connection and 1.2 to 1.3 s after
-that; Excel took 1.2 s. The VM used 23.4 GB of disk and 3.5 GiB of memory.
+One hidden RDP connection stays open with a small agent in Windows, so a
+launch is a request file, not a new connection. Measured on one machine
+(2026-11-12: dockur 6.06, Windows 11 Enterprise evaluation, Microsoft 365
+Apps, FreeRDP 3, Hyprland 0.57): a Word file opened in 1.2 s through the
+agent against 2.1 s through WinApps alone, and in 0.24 to 0.33 s once the
+agent keeps Word warm. The VM used 17 GB of disk and 3.4 GiB of memory.
+Details and the full table are in [docs/desktop-tier.md](docs/desktop-tier.md).
 
  The Windows VM can read your whole
 home folder; read the warning in [docs/desktop-tier.md](docs/desktop-tier.md)

@@ -85,6 +85,8 @@ oh_config_load() {
     [email]=""
     [mail]=1
     [desktop_office]=""
+    [desktop_agent]=on
+    [desktop_warm]="word,excel,powerpoint"
     [onedrive_cache_size]=20G
     [apps]=all
   )
