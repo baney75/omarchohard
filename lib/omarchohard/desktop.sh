@@ -607,6 +607,50 @@ oh_desktop_resume() {
     oh_die "the Windows VM is $state; start it with: omarchohard desktop up"
     ;;
   esac
+  # In the background, so a launch never waits on systemd.
+  oh_dry || (oh_desktop_autopause_arm >/dev/null 2>&1 &)
+}
+
+# Idle pause, as WinApps' autopause does, in a user timer of its own: a
+# FreeRDP holder killed before its own pause (a logout, a killed terminal)
+# used to leave the VM running for good. Every AUTOPAUSE_TIME seconds it
+# pauses the VM if no FreeRDP is connected to it, then stops itself; opening
+# an app arms it again.
+OH_AUTOPAUSE_UNIT=omarchohard-autopause
+
+oh_desktop_autopause_arm() {
+  ((${#OH_WA[@]})) || oh_winapps_conf_load || return 1
+  [[ ${OH_WA[AUTOPAUSE]} == on && ${OH_WA[AUTOPAUSE_TIME]} =~ ^[0-9]+$ ]] && oh_have systemd-run || return 1
+  systemctl --user is-active --quiet "$OH_AUTOPAUSE_UNIT.timer" 2>/dev/null && return 0
+  # The same home, config and container engine this shell sees.
+  local v
+  local -a env=("--setenv=HOME=$HOME" "--setenv=PATH=$PATH")
+  for v in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
+    [[ -z ${!v:-} ]] || env+=("--setenv=$v=${!v}")
+  done
+  systemd-run --user --quiet --collect --unit="$OH_AUTOPAUSE_UNIT" "${env[@]}" \
+    --on-active="${OH_WA[AUTOPAUSE_TIME]}s" --on-unit-inactive="${OH_WA[AUTOPAUSE_TIME]}s" \
+    "$(oh_bin_path)" desktop autopause
+}
+
+# `desktop autopause`, run by that timer.
+oh_desktop_autopause() {
+  local engine state=missing lk
+  # No config or engine: nothing to pause, and the timer stops below.
+  if oh_winapps_conf_load && engine=$(oh_desktop_engine); then
+    state=$("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null) || state=missing
+  fi
+  if [[ ${state%% *} == running ]]; then
+    # A holder holds this lock while its FreeRDP runs.
+    mkdir -p "$OH_AGENT_DIR"
+    exec {lk}>"$OH_AGENT_DIR/holder.lock"
+    flock -n "$lk" || return 0
+    # Any FreeRDP of ours connected to the VM: the holder, desktop run, WinApps.
+    oh_have pgrep || return 0
+    pgrep -u "$(id -u)" -f -- "/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}( |$)" >/dev/null 2>&1 && return 0
+    oh_desktop_compose pause >/dev/null 2>&1 || return 0
+  fi
+  systemctl --user stop "$OH_AUTOPAUSE_UNIT.timer" >/dev/null 2>&1 || true
 }
 
 # Open any file under ~ or /run/media in Windows with its Windows default
@@ -925,6 +969,8 @@ oh_desktop_holder() {
   wait "$pid" || true
   rm -f -- "$cproc" "$OH_AGENT_DIR/agent.beat"
   [[ -z ${OH_HOLDER_LOCK:-} ]] || exec {OH_HOLDER_LOCK}>&-
+  oh_desktop_autopause_arm >/dev/null 2>&1 && return 0
+  # No user systemd: pause from here, as before.
   [[ ${OH_WA[AUTOPAUSE]} == on && ${OH_WA[AUTOPAUSE_TIME]} =~ ^[0-9]+$ ]] || return 0
   sleep "${OH_WA[AUTOPAUSE_TIME]}"
   exec {lk}>"$OH_AGENT_DIR/holder.lock"
@@ -1282,6 +1328,7 @@ oh_desktop() {
   run) oh_desktop_run "$@" ;;
   open) oh_desktop_open "$@" ;;
   holder) oh_desktop_holder ;;
+  autopause) oh_desktop_autopause ;;
   slim) oh_desktop_slim "$@" ;;
   update) oh_desktop_update "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;

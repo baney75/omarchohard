@@ -32,6 +32,10 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- Desktop Office pauses its idle VM reliably. The pause ran inside the
+  FreeRDP holder, so a holder that was killed first (a logout, a closed
+  terminal) left Windows running, using about 4 GB of memory and 13% of a
+  core. A user timer of its own now pauses the VM once nothing is connected.
 - Word templates (`.dot`), macro-enabled Excel templates (`.xltm`),
   macro-enabled PowerPoint slide shows (`.ppsm`) and macro-enabled
   PowerPoint templates (`.potm`) now open in Office from Files.
