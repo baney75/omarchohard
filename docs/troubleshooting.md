@@ -117,6 +117,19 @@ with.
   you@school.edu`.
 - `omarchohard login --email ADDR` pre-fills the address on the sign-in page.
 
+## Desktop Office: "Another user is signed in"
+
+A desktop Office app shows a Windows box saying another user is signed in,
+or `omarchohard desktop apps` stops with "REMOTE DESKTOP PROTOCOL FAILURE".
+Windows is still signed in on its own screen, and a RemoteApp cannot start
+while that session is open. dockur signs the user in automatically after
+setup; VMs installed since 0.2.0 sign out at the end of the first boot and
+turn automatic sign-in off.
+
+For a VM installed earlier, sign out of Windows once at
+<http://127.0.0.1:8006> (Start, your name, Sign out), then run
+`omarchohard desktop apps`.
+
 ## Something else
 
 Open an issue with the output of `omarchohard version` and

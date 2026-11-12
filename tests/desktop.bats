@@ -78,6 +78,53 @@ fake_vm() {
   [ "$status" -ne 0 ]
 }
 
+@test "the first-boot script runs WinApps' TimeSync task and the inbox task with no window" {
+  stub docker 'exit 0'
+  stub git 'exit 0'
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  bat=$XDG_DATA_HOME/omarchohard/vm/oem/install.bat
+  # The same task name as WinApps' winapps-install.bat, so it replaces it.
+  grep -qF 'schtasks /Create /F /TN "TimeSync" /SC ONLOGON /RL HIGHEST ^' "$bat"
+  grep -qxF '  /TR "conhost.exe --headless powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%windir%\TimeSync.ps1\""' "$bat"
+  grep -qxF '  /TR "conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OEM\inbox.ps1"' "$bat"
+  # It comes after WinApps' own script, which would otherwise create it.
+  [ "$(grep -n 'call C:.OEM.winapps-install.bat' "$bat" | cut -d: -f1)" -lt "$(grep -n '/TN "TimeSync"' "$bat" | cut -d: -f1)" ]
+  run grep -E '/TR "powershell' "$bat"
+  [ "$status" -ne 0 ]
+}
+
+@test "the first-boot script signs out of the console after Office, with automatic sign-in off" {
+  stub docker 'exit 0'
+  stub git 'exit 0'
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  bat=$XDG_DATA_HOME/omarchohard/vm/oem/install.bat
+  office=$(grep -n 'office.ps1' "$bat" | tail -1 | cut -d: -f1)
+  reg=$(grep -nxF 'reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f' "$bat" | cut -d: -f1)
+  [ -n "$reg" ] && [ "$office" -lt "$reg" ]
+  # Signing out is the last thing it does.
+  [ "$(tail -n 1 "$bat")" = 'shutdown /l /f' ]
+}
+
+@test "when WinApps cannot connect, desktop wait says to sign out of Windows once" {
+  vm_stub
+  rdp_listen
+  office_status ready
+  wa=$XDG_DATA_HOME/omarchohard/winapps
+  mkdir -p "$wa"
+  printf '#!/bin/sh\necho "REMOTE DESKTOP PROTOCOL FAILURE"\nexit 14\n' >"$wa/setup.sh"
+  chmod +x "$wa/setup.sh"
+  run "$OH" desktop wait
+  [ "$status" -eq 1 ]
+  [[ $output == *"sign out of Windows once at http://127.0.0.1:8006 (Start, your name, Sign out)"* ]]
+  # Any other failure gets no such advice.
+  printf '#!/bin/sh\nexit 5\n' >"$wa/setup.sh"
+  run "$OH" desktop wait
+  [ "$status" -eq 1 ]
+  [[ $output != *"Sign out"* ]]
+}
+
 # A filesystem type for stat -f, so the btrfs path runs anywhere.
 fs_is() {
   real_stat=$(command -v stat)

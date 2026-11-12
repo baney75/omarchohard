@@ -5,9 +5,23 @@ rem as an administrator, at the end of Windows setup.
 rem 1. WinApps' own setup: RemoteApp registry keys, time sync, network profile.
 if exist C:\OEM\winapps-install.bat call C:\OEM\winapps-install.bat
 
+rem WinApps' TimeSync task again, under the same name, through a console host
+rem with no window: Windows 11's default terminal ignores -WindowStyle Hidden
+rem and shows an "Administrator: powershell.exe" window at every sign-in.
+if exist %windir%\TimeSync.ps1 schtasks /Create /F /TN "TimeSync" /SC ONLOGON /RL HIGHEST ^
+  /TR "conhost.exe --headless powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%windir%\TimeSync.ps1\""
+
 rem 2. The inbox task: applies one-shot requests from the Linux side.
 schtasks /Create /F /TN "omarchohard-inbox" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST ^
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OEM\inbox.ps1"
+  /TR "conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OEM\inbox.ps1"
 
-rem 3. Microsoft Office from Microsoft's CDN.
+rem 3. Microsoft Office from Microsoft's CDN. office.ps1 writes "ready" (or
+rem "failed") to office-status.json before it returns.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\office.ps1 > C:\OEM\office.log 2>&1
+
+rem 4. Sign out of the console, last. dockur signs the user in automatically
+rem after setup, and while that console session is open a RemoteApp shows
+rem "Another user is signed in" instead of the app. Automatic sign-in stays
+rem off, so the next boot leaves the session free for RemoteApp.
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f
+shutdown /l /f

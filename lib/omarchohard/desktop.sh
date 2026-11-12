@@ -434,11 +434,22 @@ oh_desktop_wait() {
 
 # Add the Office apps to the launcher through WinApps, without questions, and
 # send local Office files to them.
+# WinApps' setup.sh, run from its own folder, as it loads
+# ./install/inquirer.sh. It exits 14 when FreeRDP cannot connect, which on a
+# VM installed before 0.2.0 means Windows is still signed in at its console:
+# a RemoteApp then shows "Another user is signed in" instead of the app.
+oh_winapps_setup() {
+  local rc=0
+  (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh "$@") || rc=$?
+  ((rc != 14)) ||
+    oh_warn "WinApps could not open an app over RDP. If Windows is signed in on its own screen, sign out of Windows once at http://127.0.0.1:8006 (Start, your name, Sign out), then run: omarchohard desktop apps"
+  return "$rc"
+}
+
 oh_desktop_register() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "Adding Word, Excel, PowerPoint, Outlook and OneNote to the launcher..."
-  # setup.sh loads ./install/inquirer.sh, so it runs from its own folder.
-  (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user --setupAllOfficiallySupportedApps) ||
+  oh_winapps_setup --user --setupAllOfficiallySupportedApps ||
     oh_die "WinApps could not add the apps; try again with: omarchohard desktop apps"
   oh_desktop_addin_entry_write
   oh_refresh_desktop_db
@@ -449,7 +460,7 @@ oh_desktop_register() {
 oh_desktop_apps() {
   [[ -x $OH_WINAPPS_DIR/setup.sh ]] || oh_die "run omarchohard desktop install first"
   oh_say "WinApps now scans the VM and lists the apps it found. Choose the Office apps."
-  (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user)
+  oh_winapps_setup --user || oh_die "WinApps did not finish; run omarchohard desktop apps again"
   oh_desktop_addin_entry_write
   oh_refresh_desktop_db
   oh_say ""
