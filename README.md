@@ -101,7 +101,8 @@ steps that each take one keypress:
 3. **Account.** Your Microsoft email, optional; it fills in the sign-in page
    and the OneDrive address.
 4. **Apps and files.** Pick which apps to install (all are checked; space
-   toggles), and whether `mailto:` links open Outlook.
+   toggles), which files open in Office (Microsoft formats only, or other
+   formats too), and whether `mailto:` links open Outlook.
 5. **Sign in.** Opens Microsoft's own sign-in page once. Skip it if you are
    already signed in in that browser.
 6. **OneDrive.** Files on demand with rclone (recommended), a full offline
@@ -162,13 +163,26 @@ omarchohard remove onenote outlook
 
 Microsoft 365 home always stays, as it is the way to every app and to Copilot.
 
+### Choosing files
+
+Microsoft Office files (`.docx`, `.xlsx`, `.pptx` and their older, macro and
+template forms) open from Files in Office. Other formats keep the app they
+had unless you add them:
+
+```sh
+omarchohard files              # show the choice
+omarchohard files odt,csv      # also .odt in Word and .csv in Excel
+omarchohard files all          # also .odt .ods .odp .rtf .csv
+omarchohard files microsoft    # back to Microsoft formats only
+```
+
 ## Supported apps
 
 | App | Web address | Files and links it opens | Desktop tier |
 | --- | --- | --- | --- |
-| Word | `word.cloud.microsoft` | `.docx` `.doc` `.docm` `.dotx` `.dotm` `.rtf` `.odt`, `ms-word:` links | Yes |
-| Excel | `excel.cloud.microsoft` | `.xlsx` `.xls` `.xlsm` `.xlsb` `.xltx` `.ods`, `ms-excel:` links | Yes |
-| PowerPoint | `powerpoint.cloud.microsoft` | `.pptx` `.ppt` `.pptm` `.ppsx` `.potx` `.odp`, `ms-powerpoint:` links | Yes |
+| Word | `word.cloud.microsoft` | `.docx` `.doc` `.docm` `.dot` `.dotx` `.dotm`, `ms-word:` links; `.odt` `.rtf` if chosen | Yes |
+| Excel | `excel.cloud.microsoft` | `.xlsx` `.xls` `.xlsm` `.xlsb` `.xlt` `.xltx` `.xltm`, `ms-excel:` links; `.ods` `.csv` if chosen | Yes |
+| PowerPoint | `powerpoint.cloud.microsoft` | `.pptx` `.ppt` `.pptm` `.pps` `.ppsx` `.ppsm` `.pot` `.potx` `.potm`, `ms-powerpoint:` links; `.odp` if chosen | Yes |
 | Outlook | `outlook.cloud.microsoft/mail/` | `mailto:` links (skipped with `--no-mail`) | Yes |
 | OneNote | `onenote.cloud.microsoft` | `onenote:` links | Yes |
 | Teams | `teams.cloud.microsoft` | `msteams:` links (meetings, chats) | No, web only |

@@ -131,6 +131,25 @@ app_url() {
   [ "$(app_url)" = https://word.cloud.microsoft/ ]
 }
 
+@test "template, slideshow and csv files route to their app by extension" {
+  : >"$BATS_TEST_TMPDIR/Pitch.potm"
+  : >"$BATS_TEST_TMPDIR/Show.ppsm"
+  : >"$BATS_TEST_TMPDIR/Memo.dot"
+  : >"$BATS_TEST_TMPDIR/Plan.xltm"
+  : >"$BATS_TEST_TMPDIR/Sales.csv"
+  run "$OH" open "$BATS_TEST_TMPDIR/Pitch.potm"
+  [ "$(app_url)" = https://powerpoint.cloud.microsoft/ ]
+  run "$OH" open "$BATS_TEST_TMPDIR/Show.ppsm"
+  [ "$(app_url)" = https://powerpoint.cloud.microsoft/ ]
+  run "$OH" open "$BATS_TEST_TMPDIR/Memo.dot"
+  [ "$(app_url)" = https://word.cloud.microsoft/ ]
+  run "$OH" open "$BATS_TEST_TMPDIR/Plan.xltm"
+  [ "$(app_url)" = https://excel.cloud.microsoft/ ]
+  run "$OH" open "$BATS_TEST_TMPDIR/Sales.csv"
+  [ "$status" -eq 0 ]
+  [ "$(app_url)" = https://excel.cloud.microsoft/ ]
+}
+
 @test "file:// URIs are decoded before routing" {
   with_onedrive
   mkdir -p "$HOME/OneDrive/A B"

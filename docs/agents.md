@@ -40,6 +40,7 @@ omarchohard setup --yes --optimize \
 | `--browser B` | The browser command, such as `chromium` or `microsoft-edge-stable` |
 | `--shared` or `--isolated` | Share the everyday browser profile (default) or give Microsoft 365 its own |
 | `--apps LIST` | `all`, or a comma list of `word excel powerpoint outlook onenote teams onedrive` |
+| `--files F` | Which files open in Office: `microsoft` (default), `all`, or Microsoft formats plus a comma list of `odt ods odp rtf csv`. Without it, `--yes` keeps the current choice |
 | `--email E` | Fills in the sign-in page and OneDrive address |
 | `--no-mail` | Leave the `mailto:` handler alone |
 | `--onedrive C` | `rclone`, `abraunegg` or `none`. With `--yes`, OneDrive is skipped unless named, as its sign-in needs a person |

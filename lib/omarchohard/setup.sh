@@ -77,28 +77,36 @@ oh_ui_choose() {
   printf '%s\n' "${!answer}"
 }
 
-# oh_ui_pick HEADER OPTION...: several choices, all selected to start; prints
-# one per line. Plain prompts take numbers ("1 3 6"); Enter keeps them all.
+# oh_ui_pick HEADER OPTION...: several choices; prints the chosen, one per
+# line. All start selected, or the comma list in OH_PICK_SELECTED. Plain
+# prompts take numbers ("1 3 6"); Enter keeps the selected ones.
 oh_ui_pick() {
-  local header=$1 answer n
+  local header=$1 answer n selected
   shift
+  selected=${OH_PICK_SELECTED-$(
+    IFS=,
+    printf '%s' "$*"
+  )}
   if ! oh_ui_interactive; then
-    printf '%s\n' "$@"
-    return
+    for ((n = 1; n <= $#; n++)); do [[ ,$selected, == *",${!n},"* ]] && printf '%s\n' "${!n}"; done
+    return 0
   fi
   if oh_ui_gum; then
-    gum choose --no-limit --header "$header" --selected "$(
-      IFS=,
-      printf '%s' "$*"
-    )" "$@" <&"$OH_TTY_FD"
+    gum choose --no-limit --header "$header" --selected "$selected" "$@" <&"$OH_TTY_FD"
     return
   fi
   printf '%s\n' "$header" >&2
-  for ((n = 1; n <= $#; n++)); do printf '  %d) %s\n' "$n" "${!n}" >&2; done
-  read -r -p "Numbers to install [all]: " answer <&"$OH_TTY_FD" || answer=''
+  for ((n = 1; n <= $#; n++)); do
+    if [[ ,$selected, == *",${!n},"* ]]; then printf '  %d) %s *\n' "$n" "${!n}" >&2; else printf '  %d) %s\n' "$n" "${!n}" >&2; fi
+  done
+  if [[ -n ${OH_PICK_SELECTED+set} ]]; then
+    read -r -p "Numbers [the ones marked *]: " answer <&"$OH_TTY_FD" || answer=''
+  else
+    read -r -p "Numbers to install [all]: " answer <&"$OH_TTY_FD" || answer=''
+  fi
   if [[ -z ${answer//[[:space:],]/} ]]; then
-    printf '%s\n' "$@"
-    return
+    for ((n = 1; n <= $#; n++)); do [[ ,$selected, == *",${!n},"* ]] && printf '%s\n' "${!n}"; done
+    return 0
   fi
   for n in ${answer//,/ }; do
     [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= $#)) && printf '%s\n' "${!n}"
@@ -221,10 +229,57 @@ oh_setup_tier() {
   if [[ $choice == Desktop* ]]; then echo desktop; else echo web; fi
 }
 
+# Which files open in Office: prints a `files` value. Only formats of enabled
+# apps are offered; with no Word, Excel or PowerPoint, or no terminal, the
+# current value stays.
+oh_setup_files() {
+  local ext choice label want=''
+  local -a offer=() picked=()
+  local -A name=([odt]="OpenDocument text" [ods]="OpenDocument spreadsheet"
+    [odp]="OpenDocument presentation" [rtf]="Rich Text" [csv]="Comma-separated values")
+  for ext in $OH_FILES_OTHER; do
+    oh_app_enabled "${OH_EXT_APP[$ext]}" && offer+=(".$ext  ${name[$ext]}")
+  done
+  if ! oh_ui_interactive || ((${#offer[@]} == 0)); then
+    oh_config_get files
+    return 0
+  fi
+  local -a opts=("Microsoft Office files only (.docx, .xlsx, .pptx and their older, macro and template forms)"
+    "Microsoft Office files and other formats too")
+  # The current choice is the default, so Enter on a rerun keeps it.
+  [[ $(oh_config_get files) == microsoft ]] || opts=("${opts[1]}" "${opts[0]}")
+  choice=$(oh_ui_choose "Which files should open in Office?" "${opts[@]}") || return 1
+  if [[ $choice == *only* ]]; then
+    echo microsoft
+    return 0
+  fi
+  # Formats already on start ticked; a first choice ticks them all.
+  local on='' sel=''
+  [[ $(oh_config_get files) == microsoft ]] || on=" $(oh_files_other | tr '\n' ' ')"
+  for label in "${offer[@]}"; do
+    ext=${label#.}
+    ext=${ext%% *}
+    [[ -z $on || $on == *" $ext "* ]] && sel+=${sel:+,}$label
+  done
+  # Esc in gum is a cancel, not an empty pick that would turn every format off.
+  local out
+  out=$(OH_PICK_SELECTED=$sel oh_ui_pick "Which other formats? (space toggles, Enter confirms)" "${offer[@]}") || return 1
+  [[ -z $out ]] || mapfile -t picked <<<"$out"
+  for label in "${picked[@]}"; do
+    label=${label#.}
+    want+=${want:+,}${label%% *}
+  done
+  # Formats of apps not picked this time stay as they were.
+  for ext in $(oh_files_other); do
+    oh_app_enabled "${OH_EXT_APP[$ext]}" || want+=${want:+,}$ext
+  done
+  oh_files_parse "$want"
+}
+
 oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
   local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer tier='' desktop_failed=0
-  local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' optimize=0
+  local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' want_files='' optimize=0
   local -a browsers labels
   while (($#)); do
     case $1 in
@@ -242,6 +297,10 @@ oh_setup() {
     --tier) tier=${2:?--tier needs desktop or web} && shift ;;
     --apps)
       want_apps=$(oh_apps_parse "${2:?--apps needs a list, like word,excel,teams or all}") || exit 1
+      shift
+      ;;
+    --files)
+      want_files=$(oh_files_parse "${2:?--files needs microsoft, all or a list, like odt,csv}") || exit 1
       shift
       ;;
     *) oh_die "unknown setup option: $1 (see: omarchohard help setup)" ;;
@@ -351,6 +410,9 @@ oh_setup() {
     [[ -n $want_apps ]] || want_apps=all
   fi
   oh_config_set apps "$want_apps"
+  [[ -n $want_files ]] || want_files=$(oh_setup_files) || oh_die "setup cancelled"
+  oh_config_set files "$want_files"
+  oh_ok "files: $(oh_files_label)"
   if [[ $want_mail == 0 ]]; then
     mail_flag=(--no-mail)
   else

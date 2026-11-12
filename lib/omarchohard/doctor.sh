@@ -24,7 +24,7 @@ oh_doc() {
 }
 
 oh_doctor_app() {
-  local id=$1 name desktop file exec_bin mimes mime scheme current
+  local id=$1 name desktop file exec_bin mime scheme current
   name=$(oh_app_name "$id")
   desktop=$(oh_app_desktop_id "$id")
   file=$OH_APPS_DIR/$desktop
@@ -48,8 +48,7 @@ oh_doctor_app() {
   fi
 
   local -a want=()
-  mimes=$(oh_app_mimes "$id")
-  [[ -n $mimes ]] && IFS=';' read -r -a want <<<"$mimes"
+  mapfile -t want < <(oh_app_file_mimes "$id")
   for scheme in $(oh_app_schemes "$id" | tr ';' ' '); do
     [[ $scheme == mailto && $(oh_config_get mail) == 0 ]] && continue
     want+=("x-scheme-handler/$scheme")
