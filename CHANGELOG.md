@@ -57,6 +57,21 @@ builds are not listed; they carry the version of the next release plus a
 - The README leads with desktop Office and keeps the web apps as the light
   option.
 
+### Fixed
+
+- `desktop update` and `desktop activate` reach Windows. Windows kept a cached
+  listing of the shared inbox folder and never saw a request written from
+  Linux; the first boot now turns the SMB client cache off.
+- `desktop status` counts RDP as up only when Windows answers an RDP
+  connection request, not when Docker's port proxy accepts a connection.
+- Launch-or-focus and the Hyprland rules match windows titled with the full
+  app name, such as `Budget.xlsx - Microsoft Excel`, as RemoteApp shows them.
+- `desktop activate --status` reports Microsoft 365 by its version and
+  channel instead of "not installed".
+- Setup's "Open Word now?" opens desktop Word when desktop Office is chosen.
+- The first boot removes the plain-text password automatic sign-in left in
+  the registry, and turns hibernation off, which saves several GB of disk.
+
 ## [0.1.1] - 2026-11-11
 
 ### Fixed
