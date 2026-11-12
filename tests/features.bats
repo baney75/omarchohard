@@ -205,16 +205,58 @@ link_only_for() {
 case \"\$*\" in link*'--onedrive-link-scope $1 '*) echo https://contoso-my.sharepoint.com/:w:/g/x ;; link*) exit 1 ;; esac"
 }
 
-@test "share --link falls back to an anyone link when the account has no organization" {
+@test "share --link never widens an organization link to anyone when it fails" {
   onedrive_rclone
-  printf 'email=you@gmail.com\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
   printf 'x' >"$HOME/OneDrive/Docs/Plan.docx"
   link_only_for anonymous
-  run "$OH" share --link "$HOME/OneDrive/Docs/Plan.docx"
+  run "$OH" share --link --org "$HOME/OneDrive/Docs/Plan.docx"
+  [ "$status" -ne 0 ]
+  [[ $output != *"https://"* ]]
+  [[ $output == *"--anyone"* ]]
+  run grep -q 'link-scope anonymous' "$HOME/rclone.log"
+  [ "$status" -ne 0 ]
+}
+
+@test "share --link --anyone narrows to an organization link when anyone links are off" {
+  onedrive_rclone
+  printf 'x' >"$HOME/OneDrive/Docs/Plan.docx"
+  link_only_for organization
+  run "$OH" share --link --anyone "$HOME/OneDrive/Docs/Plan.docx"
   [ "$status" -eq 0 ]
-  [[ $output == *"https://contoso-my.sharepoint.com/:w:/g/x"* ]]
-  [[ $output == *"anyone with the link"* ]]
-  grep -q 'link-scope organization' "$HOME/rclone.log"
+  [[ $output == *"people in your organization"* ]]
+  grep -q 'link-scope anonymous' "$HOME/rclone.log"
+}
+
+@test "import stops instead of looping when the copy cannot be moved into OneDrive" {
+  onedrive_rclone
+  stub rclone 'exit 0'
+  stub mv 'exit 1'
+  printf 'one\n' >"$HOME/Report.docx"
+  run timeout 10 "$OH" share "$HOME/Report.docx"
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ]
+  [[ $output == *"could not copy"* ]]
+  run find "$HOME/OneDrive" -name '.*'
+  [ -z "$output" ]
+}
+
+# The patterns office.ps1 matches the signer with, run through grep -E
+# (the same syntax for these patterns as .NET).
+signer_ok() {
+  local subject=$1 issuer=$2 pats
+  mapfile -t pats < <(grep -o "notmatch '[^']*'" "$BATS_TEST_DIRNAME/../share/omarchohard/vm/office.ps1" | sed "s/^notmatch '//; s/'\$//")
+  [ "${#pats[@]}" -eq 3 ]
+  printf '%s\n' "$subject" | grep -qE -- "${pats[0]}" &&
+    printf '%s\n' "$issuer" | grep -qE -- "${pats[1]}" &&
+    printf '%s\n' "$issuer" | grep -qE -- "${pats[2]}"
+}
+
+@test "the VM runs setup.exe only when Microsoft signed it" {
+  ms='O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+  signer_ok "CN=Microsoft Corporation, $ms" "CN=Microsoft Code Signing PCA 2011, $ms"
+  ! signer_ok "CN=Evil, O=Microsoft Corporation Evil Ltd, C=US" "CN=Microsoft Code Signing PCA 2011, $ms" || false
+  ! signer_ok "CN=Evil, OU=O=Microsoft Corporation, O=Evil" "CN=Microsoft Code Signing PCA 2011, $ms" || false
+  ! signer_ok "CN=Microsoft Corporation, $ms" "CN=Some CA, O=Microsoft Corporation, C=US" || false
+  ! signer_ok "CN=Microsoft Corporation, $ms" "CN=Microsoft Code Signing PCA 2011, O=Evil" || false
 }
 
 @test "share --link falls back to an organization link when anyone links are off" {

@@ -9,7 +9,13 @@ Invoke-WebRequest -UseBasicParsing -Uri 'https://officecdn.microsoft.com/pr/wsus
 
 # Run it only if Microsoft signed it.
 $sig = Get-AuthenticodeSignature "$work\setup.exe"
-if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+# Match whole names, so "O=Microsoft Corporation Example" does not pass.
+$subject = "$($sig.SignerCertificate.Subject)"
+$issuer = "$($sig.SignerCertificate.Issuer)"
+if ($sig.Status -ne 'Valid' -or
+    $subject -notmatch '(^|,\s*)O=Microsoft Corporation(\s*,|$)' -or
+    $issuer -notmatch '(^|,\s*)O=Microsoft Corporation(\s*,|$)' -or
+    $issuer -notmatch '(^|,\s*)CN=Microsoft (Windows )?(Code Signing PCA|Windows Production PCA)[^,]*(\s*,|$)') {
   Remove-Item -Force "$work\setup.exe"
   Write-Output "office: refused setup.exe: signature is $($sig.Status), signed by '$($sig.SignerCertificate.Subject)'"
   exit 1

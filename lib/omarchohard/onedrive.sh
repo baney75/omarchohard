@@ -143,7 +143,8 @@ EOF
 }
 
 oh_onedrive_setup() {
-  local client=rclone dir remote email guess answer current
+  local client=rclone dir remote email guess answer current unit_before
+  unit_before=$(cat "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT" 2>/dev/null || true)
   current=$(oh_config_get onedrive_client)
   dir=$(oh_config_get onedrive_dir)
   remote=$(oh_config_get onedrive_remote)
@@ -219,9 +220,14 @@ EOF
   oh_config_set onedrive_dir "$dir"
   oh_manifest_add "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT"
   oh_run systemctl --user daemon-reload
-  # restart, as enable --now leaves an already running unit on its old file.
+  # enable --now leaves a running unit on its old file, so restart when the
+  # file changed. A running mount with the same file is left alone, as a
+  # restart unmounts it under any open documents.
   oh_run systemctl --user enable "$OH_ONEDRIVE_UNIT"
-  oh_run systemctl --user restart "$OH_ONEDRIVE_UNIT"
+  if [[ $(cat "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT" 2>/dev/null) != "$unit_before" ]] ||
+    ! systemctl --user is-active --quiet "$OH_ONEDRIVE_UNIT" 2>/dev/null; then
+    oh_run systemctl --user restart "$OH_ONEDRIVE_UNIT"
+  fi
 
   if [[ -z $(oh_config_get onedrive_web_root) ]]; then
     email=$(oh_config_get email)

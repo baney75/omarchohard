@@ -192,6 +192,34 @@ case " $* " in *" is-active "*) exit 3 ;; esac'
   [ ! -e "$HOME/$UNIT_REL" ]
 }
 
+@test "uninstall removes nothing while OneDrive keeps running" {
+  oh_install_quiet
+  onedrive_stubbed
+  # shellcheck disable=SC2016
+  stub systemctl 'printf "%s\n" "$*" >>"$HOME/systemctl.log"; exit 0'
+  run "$OH" uninstall
+  [ "$status" -ne 0 ]
+  [[ $output == *"still running"* ]]
+  [ -e "$HOME/$UNIT_REL" ]
+  [ -e "$XDG_DATA_HOME/applications/omarchohard-word.desktop" ]
+  grep -qx 'onedrive_client=rclone' "$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+@test "uninstall keeps the abraunegg config on record so a later --purge removes it" {
+  oh_install_quiet
+  conf=$XDG_CONFIG_HOME/onedrive/config
+  mkdir -p "${conf%/*}"
+  : >"$conf"
+  printf '%s\n' "$conf" >>"$XDG_STATE_HOME/omarchohard/manifest"
+  run "$OH" uninstall
+  [ "$status" -eq 0 ]
+  [ -e "$conf" ]
+  grep -qx "$conf" "$XDG_STATE_HOME/omarchohard/manifest"
+  run "$OH" uninstall --purge
+  [ "$status" -eq 0 ]
+  [ ! -e "$conf" ]
+}
+
 @test "install --no-mail after install gives mailto back and Outlook stops offering it" {
   dummy_app thunderbird
   xdg-mime default thunderbird.desktop x-scheme-handler/mailto

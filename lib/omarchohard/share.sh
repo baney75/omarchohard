@@ -37,6 +37,10 @@ oh_onedrive_import() {
       else
         mv -n -- "$tmp" "$dest" 2>/dev/null || true
         [[ -e $tmp ]] || break
+        if [[ ! -e $dest ]]; then
+          rm -f -- "$tmp"
+          oh_die "could not copy $abs into $dir"
+        fi
       fi
       dest="$dir/$stem ($n)${ext:+.$ext}"
       n=$((n + 1))
@@ -102,13 +106,12 @@ oh_share_link() {
       oh_run rclone link "$remote:$rel" --onedrive-link-scope "$scope" --onedrive-link-type "$type"
       return 0
     fi
-    # The account type is a guess from the email: a tenant may turn off links
-    # for anyone, and a personal account has no organization. Try the other.
-    other=organization
-    [[ $scope == organization ]] && other=anonymous
+    # A tenant may turn off links for anyone, so an anyone link that fails is
+    # retried for the organization. Never the other way: a failure must not
+    # turn an organization link into one anyone can open.
     url=$(rclone link "$remote:$rel" --onedrive-link-scope "$scope" --onedrive-link-type "$type" 2>/dev/null) ||
-      { url=$(rclone link "$remote:$rel" --onedrive-link-scope "$other" --onedrive-link-type "$type" 2>/dev/null) && scope=$other; } ||
-      oh_die "OneDrive would not make a link for $rel; your organization may limit sharing. Open it in OneDrive to share by name: omarchohard launch onedrive"
+      { [[ $scope == anonymous ]] && url=$(rclone link "$remote:$rel" --onedrive-link-scope organization --onedrive-link-type "$type" 2>/dev/null) && scope=organization; } ||
+      oh_die "OneDrive would not make a $scope link for $rel. A personal account needs --anyone, and some organizations limit sharing; to share by name, open it in its app and use Share"
     ;;
   abraunegg)
     local -a perms=()
@@ -150,7 +153,8 @@ oh_nautilus_scripts_write() {
       oh_warn "kept your own Files script '$name'; omarchohard did not add its own"
       continue
     fi
-    printf '#!/bin/sh\n# Added by omarchohard; removed by omarchohard uninstall.\nexec %q %s "$@"\n' "$bin" "$action" >"$file"
+    # bash, as printf %q can write $'...', which sh does not read.
+    printf '#!/usr/bin/env bash\n# Added by omarchohard; removed by omarchohard uninstall.\nexec %q %s "$@"\n' "$bin" "$action" >"$file"
     chmod 755 "$file"
     oh_manifest_add "$file"
   done

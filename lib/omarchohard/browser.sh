@@ -77,7 +77,10 @@ oh_focus_existing() {
   oh_have hyprctl && oh_have jq || return 1
   address=$(hyprctl clients -j 2>/dev/null | jq -r --arg re "$re" 'first(.[] | select(.class | test($re))) | .address' 2>/dev/null) || return 1
   [[ -n $address && $address != null ]] || return 1
-  oh_dry && return 0
+  if oh_dry; then
+    printf 'would run: hyprctl dispatch hl.dsp.focus({ window = "address:%s" })\n' "$address"
+    return 0
+  fi
   # Hyprland with the Lua config takes hl.dsp.focus; older builds take the
   # classic focuswindow. A rejected dispatch can still exit 0, so read the reply.
   reply=$(hyprctl dispatch "hl.dsp.focus({ window = \"address:$address\" })" 2>&1) &&
@@ -154,6 +157,8 @@ oh_prewarm() {
     [[ $(oh_config_get profile) == isolated ]] ||
       oh_die "prewarm needs the isolated profile (omarchohard install --isolated). Your default browser profile is warm whenever the browser is open."
     bin=$(oh_browser_bin) || oh_die "no Chromium-based browser found"
+    oh_require_line "$bin" "the browser path"
+    oh_require_line "$OH_DATA_DIR" "the data folder"
     mkdir -p "$OH_UNIT_DIR"
     cat >"$OH_UNIT_DIR/$OH_PREWARM_UNIT" <<EOF
 [Unit]

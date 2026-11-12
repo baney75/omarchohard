@@ -153,6 +153,11 @@ oh_refresh_desktop_db() {
   oh_have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$OH_ICON_DIR" >/dev/null 2>&1 || true
 }
 
+# A value written into a unit file must be one plain line.
+oh_require_line() {
+  [[ $1 != *[[:cntrl:]]* ]] || oh_die "$2 has a control character in it; refusing to write it into a service file"
+}
+
 # One argument of a systemd Exec line: in double quotes, with \ and " escaped,
 # and % and $ doubled so systemd reads them as text, not specifiers or variables.
 oh_unit_arg() {
@@ -189,7 +194,7 @@ oh_desktop_exec_program() {
   v=${v//"$bs$bs"/"$bs"}
   if [[ $v != \"* ]]; then
     v=${v%% *}
-    printf '%s\n' "${v//%%/%}"
+    printf '%s\n' "${v//'%%'/%}"
     return 0
   fi
   for ((i = 1; i < ${#v}; i++)); do
@@ -200,5 +205,5 @@ oh_desktop_exec_program() {
     *) out+=$c ;;
     esac
   done
-  printf '%s\n' "${out//%%/%}"
+  printf '%s\n' "${out//'%%'/%}"
 }

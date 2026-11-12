@@ -186,6 +186,18 @@ oh_setup_entry_write() {
   oh_manifest_add "$file"
 }
 
+# OneDrive setup ran in a subshell and said why it stopped; this says where
+# things stand now, as an earlier setup may still be in place.
+oh_setup_onedrive_failed() {
+  local client
+  client=$(sed -n 's/^onedrive_client=//p' "$OH_CONFIG" 2>/dev/null)
+  if [[ -n $client ]]; then
+    oh_warn "OneDrive is unchanged: still set up with $client. To switch: omarchohard onedrive setup --client <rclone|abraunegg>"
+  else
+    oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup"
+  fi
+}
+
 oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
   local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer
@@ -333,8 +345,8 @@ oh_setup() {
     if [[ $od != "Not now" && $od != none ]]; then
       # A subshell, as a failed sign-in ends oh_onedrive_setup with oh_die.
       case $od in
-      *rclone*) (oh_onedrive_setup --client rclone) <&"${OH_TTY_FD:-0}" || oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup" ;;
-      *abraunegg*) (oh_onedrive_setup --client abraunegg) <&"${OH_TTY_FD:-0}" || oh_warn "OneDrive is not set up yet; try again with: omarchohard onedrive setup" ;;
+      *rclone*) (oh_onedrive_setup --client rclone) <&"${OH_TTY_FD:-0}" || oh_setup_onedrive_failed ;;
+      *abraunegg*) (oh_onedrive_setup --client abraunegg) <&"${OH_TTY_FD:-0}" || oh_setup_onedrive_failed ;;
       *) oh_dim "Later: omarchohard onedrive setup" ;;
       esac
       OH_CFG_LOADED=0 && oh_config_load
