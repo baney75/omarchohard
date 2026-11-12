@@ -80,13 +80,20 @@ Get-ChildItem -Path $inbox -Filter '*.request' | ForEach-Object {
   else {
     switch ($req.action) {
       'office-key' {
-        if (-not $ospp) { $out = 'Office is not installed yet' ; break }
+        if (-not $ospp) {
+          $out = if ((Get-OfficeInfo).version) { 'This Office takes no key: Microsoft 365 is licensed by signing in to Word with your account' } else { 'Office is not installed yet' }
+          break
+        }
         $out = Install-ProductKey $key
       }
       'windows-key' { $out = Install-ProductKey $key }
       'status' {
         $w = cscript //nologo "$env:SystemRoot\System32\slmgr.vbs" /xpr 2>&1 | Out-String
-        $o = if ($ospp) { cscript //nologo $ospp /dstatus 2>&1 | Out-String } else { 'Office: not installed' }
+        # Microsoft 365 has no OSPP license list; it is licensed by signing in.
+        $i = Get-OfficeInfo
+        $o = if ($ospp) { cscript //nologo $ospp /dstatus 2>&1 | Out-String }
+        elseif ($i.version) { "$($i.product) $($i.version), $($i.channel) channel. Microsoft 365 is licensed by signing in to Office, not by a key." }
+        else { 'Office: not installed' }
         $out = "Windows:`n$w`nOffice:`n$o"
       }
       'update' {

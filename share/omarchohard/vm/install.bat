@@ -15,6 +15,11 @@ rem 2. The inbox task: applies one-shot requests from the Linux side.
 schtasks /Create /F /TN "omarchohard-inbox" /SC MINUTE /MO 1 /RU SYSTEM /RL HIGHEST ^
   /TR "conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\OEM\inbox.ps1"
 
+rem The shared folder changes from Linux, behind Samba's back, so Windows must
+rem not trust a cached listing of it: without this the inbox task never sees
+rem a request from omarchohard desktop update or activate.
+powershell.exe -NoProfile -Command "Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force"
+
 rem 3. Microsoft Office from Microsoft's CDN. office.ps1 writes "ready" (or
 rem "failed") to office-status.json before it returns.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\office.ps1 > C:\OEM\office.log 2>&1

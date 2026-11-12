@@ -106,6 +106,10 @@ fake_vm() {
   # The plain-text password automatic sign-in used is removed.
   grep -qxF 'reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /f' "$bat"
   grep -qxF 'powercfg /hibernate off' "$bat"
+  # Seen live: Windows kept a cached listing of the inbox and never saw a
+  # request, so the SMB client cache is off before anything opens the share.
+  smb=$(grep -n 'Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force' "$bat" | cut -d: -f1)
+  [ -n "$smb" ] && [ "$smb" -lt "$office" ]
   # Signing out is the last thing it does.
   [ "$(tail -n 1 "$bat")" = 'shutdown /l /f' ]
 }
