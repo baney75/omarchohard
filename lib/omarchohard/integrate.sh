@@ -38,6 +38,8 @@ oh_desktop_entry_write() {
   schemes=$(oh_app_schemes "$id")
   [[ -n $mimes ]] && mime_line+="$mimes;"
   for scheme in ${schemes//;/ }; do
+    # With mail=0 Outlook does not offer itself for mailto at all.
+    [[ $scheme == mailto && $(oh_config_get mail) == 0 ]] && continue
     mime_line+="x-scheme-handler/$scheme;"
   done
   wmclass=$(oh_window_class_regex "$(oh_app_url "$id")")
@@ -51,7 +53,7 @@ oh_desktop_entry_write() {
     printf 'Name=%s\n' "$name"
     printf 'GenericName=Microsoft %s\n' "$name"
     printf 'Comment=%s\n' "$(oh_app_comment "$id")"
-    printf 'Exec=%s open --app %s %%U\n' "$bin" "$id"
+    printf 'Exec=%s open --app %s %%U\n' "$(oh_desktop_exec_arg "$bin")" "$id"
     printf 'Icon=omarchohard-%s\n' "$id"
     printf 'Terminal=false\nStartupNotify=true\n'
     printf 'StartupWMClass=%s\n' "$wmclass"
@@ -99,23 +101,58 @@ oh_mimeapps_user_default() {
   ' "$list"
 }
 
-# Hand one app's types back: drop its desktop id from mimeapps.list and put
-# back the handlers saved for those types.
-oh_mime_release() {
-  local id=$1 list tmp mime previous types
+# Hand types back from one desktop id: drop it from those types' lines in
+# mimeapps.list, then restore the saved handler only where the user's list
+# still gave the type to us (a newer choice of their own stays). The types'
+# backup lines go too, so a later claim saves the user's choice at that time.
+oh_mime_release_types() {
+  local desktop=$1 list tmp mime previous types
+  shift
+  types=$(
+    IFS=';'
+    printf ';%s;' "$*"
+  )
+  local -a ours=()
+  for mime in "$@"; do
+    [[ $(oh_mimeapps_user_default "$mime") == "$desktop" ]] && ours+=("$mime")
+  done
   list=$(oh_mimeapps_file)
-  if [[ -f $list ]] && grep -qF "omarchohard-$id.desktop" "$list"; then
+  if [[ -f $list ]] && grep -qF "$desktop" "$list"; then
     tmp=$(mktemp "${list%/*}/.mimeapps.XXXXXX")
-    sed -E "s/omarchohard-$id\.desktop;?//g" "$list" | grep -v -E '^[^=[]+=$' >"$tmp" || true
+    awk -v d="$desktop" -v types="$types" '
+      {
+        i = index($0, "=")
+        key = substr($0, 1, i - 1)
+        if (i < 2 || !index(types, ";" key ";")) { print; next }
+        v = substr($0, i + 1)
+        n = split(v, p, ";")
+        out = ""
+        for (k = 1; k <= n; k++) if (p[k] != "" && p[k] != d) out = out (out == "" ? "" : ";") p[k]
+        if (out != "") print key "=" out (v ~ /;$/ ? ";" : "")
+      }' "$list" >"$tmp"
     mv "$tmp" "$list"
   fi
   [[ -f $OH_MIME_BACKUP ]] || return 0
-  types=";$(oh_app_mimes "$id");"
-  for mime in $(oh_app_schemes "$id" | tr ';' ' '); do types+="x-scheme-handler/$mime;"; done
+  tmp=$(mktemp "$OH_STATE_DIR/.mime-backup.XXXXXX")
   while IFS=$'\t' read -r mime previous; do
-    [[ -n $mime && -n $previous && $types == *";$mime;"* ]] || continue
-    xdg-mime default "$previous" "$mime" 2>/dev/null || true
+    [[ -n $mime ]] || continue
+    if [[ $types != *";$mime;"* ]]; then
+      printf '%s\t%s\n' "$mime" "$previous" >>"$tmp"
+    elif [[ -n $previous && " ${ours[*]} " == *" $mime "* ]]; then
+      xdg-mime default "$previous" "$mime" 2>/dev/null || true
+    fi
   done <"$OH_MIME_BACKUP"
+  mv "$tmp" "$OH_MIME_BACKUP"
+}
+
+# Hand one app's types back.
+oh_mime_release() {
+  local id=$1 mime
+  local -a types=()
+  [[ -n $(oh_app_mimes "$id") ]] && IFS=';' read -r -a types <<<"$(oh_app_mimes "$id")"
+  for mime in $(oh_app_schemes "$id" | tr ';' ' '); do types+=("x-scheme-handler/$mime"); done
+  ((${#types[@]})) || return 0
+  oh_mime_release_types "$(oh_app_desktop_id "$id")" "${types[@]}"
 }
 
 # Take an app off this machine: launcher, icon and file types.
@@ -152,9 +189,14 @@ oh_apps_change() {
 }
 
 # Strip every omarchohard-*.desktop reference from mimeapps.list and drop
-# keys left empty, then put back the handlers we saved.
+# keys left empty, then put back the handlers we saved, for the types the
+# user's list still gave to omarchohard.
 oh_mime_restore() {
   local list mime previous tmp
+  local -a ours=()
+  [[ -f $OH_MIME_BACKUP ]] && while IFS=$'\t' read -r mime previous; do
+    [[ -n $mime && $(oh_mimeapps_user_default "$mime") == omarchohard-* ]] && ours+=("$mime")
+  done <"$OH_MIME_BACKUP"
   list=$(oh_mimeapps_file)
   if [[ -f $list ]]; then
     tmp=$(mktemp "${list%/*}/.mimeapps.XXXXXX")
@@ -163,7 +205,7 @@ oh_mime_restore() {
   fi
   [[ -f $OH_MIME_BACKUP ]] || return 0
   while IFS=$'\t' read -r mime previous; do
-    [[ -n $mime && -n $previous ]] || continue
+    [[ -n $mime && -n $previous && " ${ours[*]} " == *" $mime "* ]] || continue
     xdg-mime default "$previous" "$mime" 2>/dev/null || true
   done <"$OH_MIME_BACKUP"
   rm -f "$OH_MIME_BACKUP"
@@ -219,6 +261,8 @@ oh_install() {
     ((${#claim[@]})) && oh_mime_claim "$id" "${claim[@]}"
     oh_ok "$(oh_app_name "$id")"
   done
+  # mail=0 after an install with mail: give mailto back.
+  [[ $mail == 0 ]] && oh_mime_release_types "$(oh_app_desktop_id outlook)" x-scheme-handler/mailto
   oh_setup_entry_write "$bin"
   oh_nautilus_scripts_write "$bin"
   oh_refresh_desktop_db
@@ -232,22 +276,37 @@ oh_install() {
 
 oh_uninstall() {
   oh_config_load
-  local purge=0 path
+  local purge=0 path abraunegg_conf
   [[ ${1:-} == --purge ]] && purge=1
+  abraunegg_conf=${XDG_CONFIG_HOME:-$HOME/.config}/onedrive/config
+  # Stop the services before their unit files go, or they keep running.
   oh_prewarm off >/dev/null 2>&1 || true
+  if ((purge)); then
+    oh_onedrive remove --quiet || oh_warn "OneDrive was not fully removed; check: omarchohard onedrive status"
+  elif [[ -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT || -n $(oh_config_get onedrive_client) ]]; then
+    systemctl --user disable --now "$OH_ONEDRIVE_UNIT" >/dev/null 2>&1 ||
+      [[ ! -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT ]] || oh_warn "could not stop $OH_ONEDRIVE_UNIT"
+    oh_config_set onedrive_client ""
+  fi
   if [[ -f $OH_MANIFEST ]]; then
     while IFS= read -r path; do
+      # The abraunegg config stays unless --purge, like the rclone remote.
+      [[ $path == "$abraunegg_conf" ]] && ((! purge)) && continue
       [[ -n $path ]] && rm -f -- "$path"
     done <"$OH_MANIFEST"
     rm -f "$OH_MANIFEST"
   fi
   rm -f "$OH_APPS_DIR"/omarchohard-*.desktop "$OH_ICON_DIR"/scalable/apps/omarchohard-*.svg
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
   oh_mime_restore
   oh_refresh_desktop_db
   if ((purge)); then
-    oh_onedrive remove --quiet || true
     rm -rf -- "$OH_CONFIG_DIR" "$OH_DATA_DIR/browser" "$OH_STATE_DIR"
     oh_ok "removed launchers, handlers, config, state and the isolated browser profile"
+    if [[ -f $OH_VM_DIR/compose.yaml ]]; then
+      oh_warn "the desktop tier's Windows VM was kept, with its password in $OH_VM_DIR/compose.yaml and $OH_WINAPPS_CONF"
+      oh_say "Remove it with: omarchohard desktop remove --delete-vm"
+    fi
   else
     oh_ok "removed launchers and handlers; restored your previous defaults"
     oh_dim "config kept in $OH_CONFIG_DIR (use --purge to remove it too)"

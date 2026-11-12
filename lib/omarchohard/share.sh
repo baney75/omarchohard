@@ -8,7 +8,7 @@ OH_CONSUMER_DOMAINS='outlook.com|hotmail.com|live.com|msn.com|passport.com'
 # Put a file into OneDrive if it is not there yet; print its OneDrive path.
 # A file from outside is copied to OneDrive/Omarchohard; the original stays.
 oh_onedrive_import() {
-  local abs=$1 root=$2 dir name stem ext dest n=1
+  local abs=$1 root=$2 dir name stem ext dest tmp n=1
   if [[ $abs == "$root"/* ]]; then
     printf '%s\n' "${abs#"$root"/}"
     return 0
@@ -23,11 +23,24 @@ oh_onedrive_import() {
     printf 'would copy: %s -> %s\n' "$abs" "$dest" >&2
   else
     mkdir -p "$dir"
-    while [[ -e $dest ]] && ! cmp -s -- "$abs" "$dest"; do
+    # Copy to a temp name, then move it into the first free name without
+    # replacing anything, so two imports of the same name both keep their file.
+    tmp=$(mktemp "$dir/.omarchohard-import.XXXXXX")
+    cp -- "$abs" "$tmp"
+    chmod --reference="$abs" -- "$tmp" 2>/dev/null || true
+    while :; do
+      if [[ -e $dest ]]; then
+        if cmp -s -- "$tmp" "$dest"; then
+          rm -f -- "$tmp"
+          break
+        fi
+      else
+        mv -n -- "$tmp" "$dest" 2>/dev/null || true
+        [[ -e $tmp ]] || break
+      fi
       dest="$dir/$stem ($n)${ext:+.$ext}"
       n=$((n + 1))
     done
-    [[ -e $dest ]] || cp -- "$abs" "$dest"
     oh_onedrive_wait_uploaded "${dest#"$root"/}"
   fi
   printf '%s\n' "${dest#"$root"/}"
@@ -81,7 +94,7 @@ oh_share() {
 }
 
 oh_share_link() {
-  local rel=$1 type=$2 scope=$3 url remote
+  local rel=$1 type=$2 scope=$3 url remote other
   case $(oh_config_get onedrive_client) in
   rclone)
     remote=$(oh_config_get onedrive_remote)
@@ -89,8 +102,12 @@ oh_share_link() {
       oh_run rclone link "$remote:$rel" --onedrive-link-scope "$scope" --onedrive-link-type "$type"
       return 0
     fi
+    # The account type is a guess from the email: a tenant may turn off links
+    # for anyone, and a personal account has no organization. Try the other.
+    other=organization
+    [[ $scope == organization ]] && other=anonymous
     url=$(rclone link "$remote:$rel" --onedrive-link-scope "$scope" --onedrive-link-type "$type" 2>/dev/null) ||
-      { [[ $scope == anonymous ]] && url=$(rclone link "$remote:$rel" --onedrive-link-scope organization --onedrive-link-type "$type" 2>/dev/null) && scope=organization; } ||
+      { url=$(rclone link "$remote:$rel" --onedrive-link-scope "$other" --onedrive-link-type "$type" 2>/dev/null) && scope=$other; } ||
       oh_die "OneDrive would not make a link for $rel; your organization may limit sharing. Open it in OneDrive to share by name: omarchohard launch onedrive"
     ;;
   abraunegg)
@@ -119,7 +136,7 @@ oh_share_link() {
 OH_NAUTILUS_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/nautilus/scripts
 
 oh_nautilus_scripts_write() {
-  local bin=$1 name action
+  local bin=$1 name action file
   oh_have nautilus || return 0
   mkdir -p "$OH_NAUTILUS_DIR"
   for name in "Share with OneDrive" "Copy OneDrive link" "Open in Microsoft 365"; do
@@ -128,8 +145,13 @@ oh_nautilus_scripts_write() {
     "Copy OneDrive link") action="share --link" ;;
     *) action="open" ;;
     esac
-    printf '#!/bin/sh\n# Added by omarchohard; removed by omarchohard uninstall.\nexec %s %s "$@"\n' "$bin" "$action" >"$OH_NAUTILUS_DIR/$name"
-    chmod 755 "$OH_NAUTILUS_DIR/$name"
-    oh_manifest_add "$OH_NAUTILUS_DIR/$name"
+    file=$OH_NAUTILUS_DIR/$name
+    if [[ -e $file ]] && ! grep -qF 'Added by omarchohard' "$file"; then
+      oh_warn "kept your own Files script '$name'; omarchohard did not add its own"
+      continue
+    fi
+    printf '#!/bin/sh\n# Added by omarchohard; removed by omarchohard uninstall.\nexec %q %s "$@"\n' "$bin" "$action" >"$file"
+    chmod 755 "$file"
+    oh_manifest_add "$file"
   done
 }

@@ -152,3 +152,129 @@ LIST
     }
   done
 }
+
+UNIT_REL=.config/systemd/user/omarchohard-onedrive.service
+
+# onedrive setup with a stub rclone whose sign-in creates the remote, and a
+# systemctl that logs whether the OneDrive unit file exists at each call.
+onedrive_stubbed() {
+  # shellcheck disable=SC2016
+  stub rclone 'printf "%s\n" "$*" >>"$HOME/rclone.log"; exit 0'
+  # shellcheck disable=SC2016
+  stub systemctl 'u=$HOME/.config/systemd/user/omarchohard-onedrive.service
+printf "%s unit=%s\n" "$*" "$([ -f "$u" ] && echo yes || echo no)" >>"$HOME/systemctl.log"
+case " $* " in *" is-active "*) exit 3 ;; esac'
+  "$OH" onedrive setup </dev/null >/dev/null 2>&1
+  [ -f "$HOME/$UNIT_REL" ]
+  : >"$HOME/systemctl.log"
+}
+
+@test "uninstall stops OneDrive before removing its unit, reloads systemd and keeps the sign-in" {
+  oh_install_quiet
+  onedrive_stubbed
+  run "$OH" uninstall
+  [ "$status" -eq 0 ]
+  grep -qx -- '--user disable --now omarchohard-onedrive.service unit=yes' "$HOME/systemctl.log"
+  grep -qx -- '--user daemon-reload unit=no' "$HOME/systemctl.log"
+  [ ! -e "$HOME/$UNIT_REL" ]
+  run grep -q 'config delete' "$HOME/rclone.log"
+  [ "$status" -ne 0 ]
+  grep -qx 'onedrive_client=' "$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+@test "uninstall --purge removes OneDrive while its unit still exists, including the remote it made" {
+  oh_install_quiet
+  onedrive_stubbed
+  run "$OH" uninstall --purge
+  [ "$status" -eq 0 ]
+  grep -qx -- '--user disable --now omarchohard-onedrive.service unit=yes' "$HOME/systemctl.log"
+  grep -qx 'config delete omarchohard-onedrive' "$HOME/rclone.log"
+  [ ! -e "$HOME/$UNIT_REL" ]
+}
+
+@test "install --no-mail after install gives mailto back and Outlook stops offering it" {
+  dummy_app thunderbird
+  xdg-mime default thunderbird.desktop x-scheme-handler/mailto
+  oh_install_quiet
+  [ "$(mime_default x-scheme-handler/mailto)" = omarchohard-outlook.desktop ]
+  grep -q 'x-scheme-handler/mailto' "$APPS/omarchohard-outlook.desktop"
+  run "$OH" install --no-mail
+  [ "$status" -eq 0 ]
+  [ "$(mime_default x-scheme-handler/mailto)" = thunderbird.desktop ]
+  run grep -q mailto "$APPS/omarchohard-outlook.desktop"
+  [ "$status" -ne 0 ]
+  run grep -q 'mailto=.*omarchohard' "$MIMEAPPS"
+  [ "$status" -ne 0 ]
+  run "$OH" doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "uninstall keeps a handler the user chose after install" {
+  dummy_app libreoffice-writer
+  dummy_app onlyoffice
+  dummy_app oldteams
+  docx=application/vnd.openxmlformats-officedocument.wordprocessingml.document
+  xdg-mime default libreoffice-writer.desktop "$docx"
+  xdg-mime default oldteams.desktop x-scheme-handler/msteams
+  oh_install_quiet
+  xdg-mime default onlyoffice.desktop "$docx"
+  run "$OH" uninstall
+  [ "$status" -eq 0 ]
+  [ "$(mime_default "$docx")" = onlyoffice.desktop ]
+  [ "$(mime_default x-scheme-handler/msteams)" = oldteams.desktop ]
+}
+
+@test "remove then add saves the handler the user picked in between" {
+  dummy_app teams-a
+  dummy_app teams-b
+  xdg-mime default teams-a.desktop x-scheme-handler/msteams
+  oh_install_quiet
+  "$OH" remove teams >/dev/null 2>&1
+  [ "$(mime_default x-scheme-handler/msteams)" = teams-a.desktop ]
+  xdg-mime default teams-b.desktop x-scheme-handler/msteams
+  "$OH" add teams >/dev/null 2>&1
+  [ "$(mime_default x-scheme-handler/msteams)" = omarchohard-teams.desktop ]
+  "$OH" remove teams >/dev/null 2>&1
+  [ "$(mime_default x-scheme-handler/msteams)" = teams-b.desktop ]
+}
+
+@test "a CLI path with a space is quoted in launchers and Files scripts" {
+  stub nautilus 'exit 0'
+  mkdir -p "$HOME/my bin"
+  ln -s "$OH" "$HOME/my bin/omarchohard"
+  PATH="$HOME/my bin:$PATH" run "$HOME/my bin/omarchohard" install
+  [ "$status" -eq 0 ]
+  grep -qxF "Exec=\"$HOME/my bin/omarchohard\" open --app word %U" "$APPS/omarchohard-word.desktop"
+  grep -qxF "Exec=\"$HOME/my bin/omarchohard\" setup --gui" "$APPS/omarchohard-setup.desktop"
+  grep -qxF "exec $(printf %q "$HOME/my bin/omarchohard") share --link \"\$@\"" "$XDG_DATA_HOME/nautilus/scripts/Copy OneDrive link"
+  if command -v desktop-file-validate >/dev/null; then
+    desktop-file-validate "$APPS/omarchohard-word.desktop"
+  fi
+  PATH="$HOME/my bin:$PATH" run "$HOME/my bin/omarchohard" doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "uninstall --purge keeps the desktop tier VM and says how to remove it" {
+  mkdir -p "$XDG_DATA_HOME/omarchohard/vm"
+  : >"$XDG_DATA_HOME/omarchohard/vm/compose.yaml"
+  oh_install_quiet
+  run "$OH" uninstall --purge
+  [ "$status" -eq 0 ]
+  [[ $output == *"omarchohard desktop remove --delete-vm"* ]]
+  [ -f "$XDG_DATA_HOME/omarchohard/vm/compose.yaml" ]
+}
+
+@test "install keeps a Files script of the user's own with the same name" {
+  stub nautilus 'exit 0'
+  scripts=$XDG_DATA_HOME/nautilus/scripts
+  mkdir -p "$scripts"
+  printf '#!/bin/sh\necho mine\n' >"$scripts/Copy OneDrive link"
+  run "$OH" install
+  [ "$status" -eq 0 ]
+  [[ $output == *"kept your own Files script 'Copy OneDrive link'"* ]]
+  [ "$(cat "$scripts/Copy OneDrive link")" = "$(printf '#!/bin/sh\necho mine')" ]
+  [ -x "$scripts/Share with OneDrive" ]
+  "$OH" uninstall >/dev/null
+  [ -f "$scripts/Copy OneDrive link" ]
+  [ ! -e "$scripts/Share with OneDrive" ]
+}

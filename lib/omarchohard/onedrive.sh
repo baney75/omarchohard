@@ -47,12 +47,16 @@ oh_onedrive_sync_now() {
   rclone)
     oh_onedrive_rc vfs/refresh recursive=true >/dev/null || oh_die "the OneDrive mount is not running: omarchohard onedrive start"
     for ((i = 0; i < 120; i++)); do
-      q=$(oh_onedrive_queue) || break
-      [[ $q == "0 0" ]] && break
+      q=$(oh_onedrive_queue) && [[ $q =~ ^[0-9]+\ [0-9]+$ ]] ||
+        oh_die "the OneDrive mount stopped answering, so uploads are not confirmed: omarchohard onedrive status"
+      if [[ $q == "0 0" ]]; then
+        oh_ok "OneDrive is in sync"
+        return 0
+      fi
       ((i % 5)) || oh_say "uploading: ${q% *} in progress, ${q#* } queued"
       sleep 1
     done
-    oh_ok "OneDrive is in sync"
+    oh_die "OneDrive is still uploading $((${q% *} + ${q#* })) files; check again with: omarchohard onedrive status"
     ;;
   abraunegg) oh_run onedrive --sync && oh_ok "OneDrive is in sync" ;;
   *) oh_die "OneDrive is not set up: omarchohard onedrive setup" ;;
@@ -97,8 +101,22 @@ oh_onedrive_set_web_root() {
   oh_ok "OneDrive web address set: $url"
 }
 
+# The folder and remote go into a unit file, so they are checked before
+# anything is written: a line break could add unit directives and a remote
+# like "x --rc-addr=..." would add rclone flags.
+oh_onedrive_check() {
+  local dir=$1 remote=$2
+  [[ $remote =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] ||
+    oh_die "the rclone remote name may have only letters, digits, _ and - (and starts with a letter or digit): $remote"
+  [[ $dir == /* ]] || oh_die "the OneDrive folder must be an absolute path: $dir"
+  [[ $dir != *[[:cntrl:]]* ]] || oh_die "the OneDrive folder name has a line break or control character"
+}
+
 oh_onedrive_rclone_unit() {
-  local dir=$1 remote=$2 rclone_bin fusermount cache
+  local dir=$1 remote=$2 rclone_bin fusermount cache qdir
+  oh_onedrive_check "$dir" "$remote"
+  qdir=$(oh_unit_arg "$dir")
+  local label=${dir//'%'/%%}
   rclone_bin=$(command -v rclone)
   cache=$(oh_config_get onedrive_cache_size)
   [[ $cache =~ ^[0-9]+[MG]$ ]] || cache=20G
@@ -106,16 +124,16 @@ oh_onedrive_rclone_unit() {
   mkdir -p "$OH_UNIT_DIR"
   cat >"$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT" <<EOF
 [Unit]
-Description=omarchohard: OneDrive at $dir (rclone)
+Description=omarchohard: OneDrive at $label (rclone)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStartPre=/usr/bin/mkdir -p $dir
+ExecStartPre=/usr/bin/mkdir -p $qdir
 ExecStartPre=/usr/bin/rm -f %t/omarchohard-rclone.sock
-ExecStart=$rclone_bin mount $remote: $dir --vfs-cache-mode full --vfs-cache-max-age 8760h --vfs-cache-max-size $cache --vfs-cache-min-free-space 2G --vfs-write-back 2s --vfs-read-ahead 16M --buffer-size 16M --transfers 8 --dir-cache-time 30s --poll-interval 30s --vfs-fast-fingerprint --rc --rc-addr unix://%t/omarchohard-rclone.sock --rc-no-auth
-ExecStop=$fusermount -uz $dir
+ExecStart=$(oh_unit_arg "$rclone_bin") mount $remote: $qdir --vfs-cache-mode full --vfs-cache-max-age 8760h --vfs-cache-max-size $cache --vfs-cache-min-free-space 2G --vfs-write-back 2s --vfs-read-ahead 16M --buffer-size 16M --transfers 8 --dir-cache-time 30s --poll-interval 30s --vfs-fast-fingerprint --rc --rc-addr unix://%t/omarchohard-rclone.sock --rc-no-auth
+ExecStop=$(oh_unit_arg "$fusermount") -uz $qdir
 Restart=on-failure
 RestartSec=10
 
@@ -125,9 +143,11 @@ EOF
 }
 
 oh_onedrive_setup() {
-  local client=rclone dir remote email guess answer
+  local client=rclone dir remote email guess answer current
+  current=$(oh_config_get onedrive_client)
   dir=$(oh_config_get onedrive_dir)
   remote=$(oh_config_get onedrive_remote)
+  [[ -n $current ]] && client=$current
   while (($#)); do
     case $1 in
     --client)
@@ -143,6 +163,12 @@ oh_onedrive_setup() {
     shift
   done
   dir=${dir/#\~/$HOME}
+  oh_onedrive_check "$dir" "$remote"
+  # Switching client or folder under a running service would sync the cloud
+  # against its own mount, or leave the mount on the old folder.
+  if [[ -n $current && ($client != "$current" || $dir != "$(oh_config_get onedrive_dir)") ]]; then
+    oh_die "OneDrive is already set up ($current at $(oh_config_get onedrive_dir)); run omarchohard onedrive remove first"
+  fi
   case $client in
   rclone)
     if ! oh_have rclone; then
@@ -166,17 +192,20 @@ oh_onedrive_setup() {
       printf 'sync_dir = "%s"\n' "$dir" >"$conf"
       oh_manifest_add "$conf"
     fi
-    oh_say "The onedrive client prints a sign-in link. Open it, sign in, and paste back the address it lands on."
-    oh_run onedrive --sync --verbose || oh_die "onedrive first sync failed. See docs/troubleshooting.md#onedrive-sign-in"
+    if [[ -z $current ]]; then
+      oh_say "The onedrive client prints a sign-in link. Open it, sign in, and paste back the address it lands on."
+      oh_run onedrive --sync --verbose || oh_die "onedrive first sync failed. See docs/troubleshooting.md#onedrive-sign-in"
+    fi
     mkdir -p "$OH_UNIT_DIR"
+    local label=${dir//'%'/%%}
     cat >"$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT" <<EOF
 [Unit]
-Description=omarchohard: OneDrive at $dir (abraunegg onedrive)
+Description=omarchohard: OneDrive at $label (abraunegg onedrive)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=$(command -v onedrive || echo /usr/bin/onedrive) --monitor
+ExecStart=$(oh_unit_arg "$(command -v onedrive || echo /usr/bin/onedrive)") --monitor
 Restart=on-failure
 RestartSec=10
 
@@ -190,7 +219,9 @@ EOF
   oh_config_set onedrive_dir "$dir"
   oh_manifest_add "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT"
   oh_run systemctl --user daemon-reload
-  oh_run systemctl --user enable --now "$OH_ONEDRIVE_UNIT"
+  # restart, as enable --now leaves an already running unit on its old file.
+  oh_run systemctl --user enable "$OH_ONEDRIVE_UNIT"
+  oh_run systemctl --user restart "$OH_ONEDRIVE_UNIT"
 
   if [[ -z $(oh_config_get onedrive_web_root) ]]; then
     email=$(oh_config_get email)
@@ -214,11 +245,13 @@ oh_onedrive_remove() {
   local quiet=0 remote
   [[ ${1:-} == --quiet ]] && quiet=1
   remote=$(oh_config_get onedrive_remote)
-  systemctl --user disable --now "$OH_ONEDRIVE_UNIT" >/dev/null 2>&1 || true
+  # Tried even without a unit file: 0.1.0's uninstall deleted it under a running service.
+  systemctl --user disable --now "$OH_ONEDRIVE_UNIT" >/dev/null 2>&1 ||
+    [[ ! -f $OH_UNIT_DIR/$OH_ONEDRIVE_UNIT ]] || oh_warn "could not stop $OH_ONEDRIVE_UNIT"
   rm -f "$OH_UNIT_DIR/$OH_ONEDRIVE_UNIT"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   if [[ -f $OH_STATE_DIR/rclone-remote-created ]] && oh_have rclone; then
-    rclone config delete "$remote" >/dev/null 2>&1 || true
+    rclone config delete "$remote" >/dev/null 2>&1 || oh_warn "could not delete the rclone remote $remote"
     rm -f "$OH_STATE_DIR/rclone-remote-created"
   fi
   oh_config_set onedrive_client ""
