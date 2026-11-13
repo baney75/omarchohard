@@ -130,6 +130,22 @@ For a VM installed earlier, sign out of Windows once at
 <http://127.0.0.1:8006> (Start, your name, Sign out), then run
 `omarchohard desktop apps`.
 
+## Native Office: AADSTS53000, 53001 or 53003
+
+Office's sign-in window stops with one of these codes. Your organization
+requires a managed Windows device for its accounts (Conditional Access), and
+native Office runs under Wine, which is not one. Nothing on the device can
+change that: use the web apps (`omarchohard setup --tier web`), or ask your
+IT department whether there is another way. omarchohard does not read
+Office's sign-in state; `omarchohard native status` lists these codes.
+
+## Native Office: "WINWORD.EXE has encountered a serious problem"
+
+wine-altars can show this once, on Word's first start in a new prefix; the
+starts after it are clean. Setup starts Word once on a hidden screen to
+absorb it when Xvfb is installed (`xorg-server-xvfb`). Without Xvfb, close
+the box; Word keeps working.
+
 ## Something else
 
 Open an issue with the output of `omarchohard version` and

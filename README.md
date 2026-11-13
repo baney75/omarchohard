@@ -15,6 +15,10 @@ curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh
 Run from a terminal, that one line installs the CLI and starts a short guided
 setup. Its first question is which Office you want:
 
+- **Native Office** (experimental): Microsoft 365's desktop apps on Linux
+  itself under Wine, no VM. About 6 minutes from Microsoft on the first
+  device, and under a minute on every other device, which copies the first
+  one's install. Needs an x86_64 machine, 8 GB of memory and 8 GB of disk.
 - **Desktop Office**: the real Windows apps, with add-ins, macros, printing
   to your Linux printers, offline use and Office's own updates. A one-time
   install of about 20 minutes; needs KVM, 16 GB of memory and about 80 GB of
@@ -22,8 +26,8 @@ setup. Its first question is which Office you want:
 - **Web apps**: Microsoft's web apps as app windows. Ready in about two
   minutes and light on memory.
 
-Setup recommends desktop Office only when your machine can run it, and says
-why when it cannot. Teams is a web app either way.
+Setup recommends native Office, then desktop Office, only when your machine
+can run it, and says why when it cannot. Teams is a web app either way.
 
 ## How desktop Office works
 
@@ -39,11 +43,13 @@ No tool converts a Windows `.exe` into a Linux program; the Windows build has
 to run on Windows. Wine and CrossOver run some Windows programs on Linux
 directly, and CrossOver shipped Office fixes for years
 ([CrossOver changelog](https://www.codeweavers.com/crossover/changelog)), but
-Wine-based setups top out at Office 2016 for the core apps, and CrossOver 26
+stock Wine tops out at Office 2016 for the core apps, and CrossOver 26
 no longer officially supports Office
 ([a comparison of the Linux options](https://gist.github.com/eylenburg/38e5da371b7fedc0662198efc66be57b)).
-A VM costs memory and disk, and in return Office behaves as it does on a
-Windows PC.
+[wine-altars](https://github.com/Altars3668/wine-altars), a Wine fork, runs
+Microsoft 365's own installer and apps; that is the
+[native tier](#native-office). A VM costs memory and disk, and in return
+Office behaves as it does on a Windows PC.
 
 Desktop Office is experimental: an end-to-end run is in progress. Word and
 Excel have opened as their own windows on one machine; the full install from
@@ -78,8 +84,8 @@ Recorded in a clean Arch container under Hyprland: the one-line install,
 ## What it is not
 
 - **Not a Linux port of Office.** Microsoft ships no Linux desktop Office.
-  Desktop Office here is the Windows build in a Windows VM; the web apps are
-  the ones Microsoft hosts at `*.cloud.microsoft`.
+  Desktop Office here is the Windows build, in a Windows VM or under Wine;
+  the web apps are the ones Microsoft hosts at `*.cloud.microsoft`.
 - **Not a browser and not a sync engine.** It drives the browser you have and
   the OneDrive client you pick.
 - **Not affiliated with Microsoft.** See the trademark notice at the end.
@@ -93,9 +99,10 @@ curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh
 From a terminal, the installer goes straight into `omarchohard setup`, six
 steps that each take one keypress:
 
-1. **Office.** Desktop Office or the web apps, as above. Desktop Office
-   installs at the end, after the other answers, and the web apps are set up
-   too, for Teams.
+1. **Office.** Native Office, desktop Office or the web apps, as above.
+   Native and desktop Office install at the end, after the other answers,
+   and the web apps are set up too, for Teams. For native Office, setup also
+   asks which Microsoft 365 you have.
 2. **Browser.** Your default Chromium-family browser is picked first. If you
    have none, setup offers to install Chromium.
 3. **Account.** Your Microsoft email, optional; it fills in the sign-in page
@@ -121,12 +128,14 @@ nobody has to type a command after the one-line install.
 curl -fsSL https://raw.githubusercontent.com/baney75/omarchohard/main/install.sh | bash -s -- --yes
 # or pick the answers:
 omarchohard setup --yes --browser chromium --apps word,excel,powerpoint,teams --onedrive none
+# native Office, without questions:
+omarchohard setup --yes --tier native --plan school
 # desktop Office, without questions:
 omarchohard setup --yes --tier desktop
 ```
 
 `--yes` without `--tier` sets up the web apps only, so a script never starts
-the Windows download unasked.
+a Microsoft download unasked.
 
 [docs/agents.md](docs/agents.md) covers `probe --json`, `optimize` and what
 still needs a person.
@@ -356,6 +365,100 @@ the same machine:
 Prewarm (`omarchohard prewarm on`) keeps one windowless browser running in
 the isolated profile. With your default profile it is not needed: when your
 browser is open, launches are already warm.
+
+## Native Office
+
+Experimental. Word, Excel, PowerPoint, Outlook and OneNote from Microsoft 365
+run on Linux itself, with no VM, under
+[wine-altars](https://github.com/Altars3668/wine-altars) (v11.19-altars.1), a
+Wine fork that runs Office's own Click-to-Run installer. omarchohard downloads
+the fork's release (110 MB, checked against its pinned SHA256 before anything
+is extracted), installs Office into a Wine prefix in
+`~/.local/share/omarchohard/native`, and opens Office files there.
+
+```sh
+omarchohard native check                                   # x86_64, Hyprland, 8 GB of memory, 8 GB free disk
+omarchohard setup --tier native --plan school              # the first device: Office from Microsoft
+omarchohard setup --tier native --yes --from ssh:laptop    # every other device: a copy of the first
+omarchohard native signin --remote                         # sign in from another device, through a one-time link
+omarchohard native status                                  # --json for scripts
+omarchohard native uninstall
+```
+
+### Who it is for
+
+| Your Microsoft 365 | What to pass | Office it installs | Sign-in done by |
+| --- | --- | --- | --- |
+| Personal or Family | `--plan personal` or `--plan family` (the default) | O365HomePremRetail | You, with your Microsoft account |
+| School, with the desktop apps | `--plan school` | O365ProPlusRetail | Each student or staff member, with the school account |
+| Work, small business (Business Standard, Business Premium, Apps for business) | `--plan business` | O365BusinessRetail | Each employee, with the work account |
+| Work, large organization (E3, E5, Apps for enterprise) | `--plan enterprise` | O365ProPlusRetail | Each employee, with the work account |
+
+Plans without the desktop apps, such as Business Basic, have the web apps
+only. Interactive setup asks which plan you have; `--yes` without `--plan`
+installs Personal and Family and says so. `--shared-computer` turns on
+[shared computer activation](https://learn.microsoft.com/en-us/microsoft-365-apps/licensing-activation/overview-shared-computer-activation)
+for a computer several people use; Microsoft supports it for school and
+enterprise plans, so omarchohard refuses it for the others. Only the
+O365ProPlusRetail install has been run under wine-altars so far.
+
+### How it behaves
+
+Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
+
+- **The first device** installs from Microsoft: the Wine prefix (48 s),
+  Microsoft Edge WebView2 for the sign-in window (94 s) and Office from a
+  local copy (2 min 36 s to 2 min 49 s), with Office's 3.4 GB download
+  running at the same time as the first two. About 6 minutes from these
+  steps; the whole fresh install through omarchohard is untested live.
+  Then it starts Word once on a hidden screen (Xvfb, when installed) to
+  absorb the fork's one-time first-start crash box, and writes the **seed**:
+  the prefix before anyone signed in, 2.9 GB.
+- **Every other device** copies a seed instead: 21 s from a seed file and
+  32 s from a `native seed serve` link on the tailnet, each with the Wine
+  download. Between two machines the network sets the pace; 2.9 GB at
+  100 MB/s is about 30 s. `--from` takes a seed file (a USB stick works),
+  `ssh:HOST`, an `https://` link, or a plain `http://` link on a private
+  address together with `--sha256`, which is checked before the seed is
+  used or kept. A seed for another plan's Office is refused.
+- **Opening.** Word's first window came up 5.7 s after a seeded install and
+  1.0 s when Wine was already running. Wine stays up for 10 minutes after
+  the last Office app closes. The apps are X11 windows through Xwayland.
+- **Fonts.** Office's interface uses Segoe UI, which is Windows' own.
+  omarchohard puts Microsoft's open-source stand-in,
+  [Selawik](https://github.com/microsoft/Selawik) (SIL Open Font License
+  1.1, shipped in `share/omarchohard/fonts/selawik`), into the prefix and
+  maps Segoe UI to it, so Office's text has its intended shapes.
+- **Disk.** The prefix takes 6.6 GB, or 3.1 GB on btrfs, where omarchohard
+  turns on zstd compression for it, plus the 2.9 GB seed.
+- **Sign-in.** Once, in Word's own window; it covers every app. `native
+  signin --remote` is for a person at another device, a phone included:
+  Word opens on a hidden screen, and a page on this device's Tailscale name
+  (Tailscale only, as it encrypts the password typed through it) shows
+  only Office's sign-in window, at its real size or smaller, in light or
+  dark mode. The link carries a one-time password after `#`, which browsers
+  never send to the server, and the page takes it out of the address bar.
+  It is printed as `Sign in here: http://laptop.example.ts.net:6080/#pw=...`
+  and sent as a notification. It stops when Word closes or after 30
+  minutes. Office has no
+  documented setting that fills in the sign-in address, so `--email` only
+  names the account in setup's messages.
+- **Updates.** Office does not update itself in this tier; a newer Office
+  comes from a new fresh install and its seed.
+- **Organizations.** A school or employer can require a managed Windows
+  device for its accounts. Office then shows error AADSTS53000, 53001 or
+  53003; use the web apps or ask IT
+  ([troubleshooting](docs/troubleshooting.md#native-office-aadsts53000-53001-or-53003)).
+
+**Seeds hold Microsoft's Office binaries.** Move them only between your own
+devices, or your organization's, and never publish one. The license comes
+from each person's own sign-in. `native seed` only ever sends the seed
+written before sign-in; it never packs the live prefix, so a signed-in
+Office never leaves the device. omarchohard never reads Office's identity or
+token stores.
+
+Setting up many devices, by hand or with agents:
+[docs/agents.md](docs/agents.md#set-up-many-devices).
 
 ## Desktop Office
 
