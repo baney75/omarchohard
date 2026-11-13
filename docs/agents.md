@@ -41,7 +41,7 @@ omarchohard setup --yes --optimize \
 | `--from SRC` | Native: copy a seed instead of installing from Microsoft. A seed file, `ssh:HOST`, an `https://` link, or a private-address `http://` link with `--sha256` |
 | `--sha256 H` | Native: the seed's SHA256, checked before the seed is used or kept |
 | `--shared-computer` | Native, fresh installs, `school` and `enterprise` only: shared computer activation |
-| `--remote-signin` | Native: end with a one-time sign-in link instead of Word on this screen. `--lan` puts it on the home network address instead of Tailscale's |
+| `--remote-signin` | Native: end with a one-time sign-in link instead of Word on this screen. Tailscale only: on a plain network the password would cross it unencrypted, so there the person signs in on the device |
 | `--json` | Print everything for people on stderr and one JSON line on stdout at the end (see [Set up many devices](#set-up-many-devices)) |
 | `--browser B` | The browser command, such as `chromium` or `microsoft-edge-stable` |
 | `--shared` or `--isolated` | Share the everyday browser profile (default) or give Microsoft 365 its own |
@@ -150,8 +150,9 @@ The last line on stdout is one JSON object:
   turns on a lock: one installs, the other then reports `ready`.
 - **The sign-in link** opens a page that shows only Office's sign-in window
   from that device's hidden screen, served only on its Tailscale address
-  under its tailnet name (or `--lan`: its home network address). It works
-  from the person's phone or laptop on the same tailnet or network. The
+  under its tailnet name. It works from the person's phone or laptop on the
+  same tailnet. There is no home network option: Tailscale is what encrypts
+  the password the person types. The
   8-character one-time password is in the link after `#`, which browsers
   never send to a server, and the page removes it from the address bar. Hand `signin_url` to that person only, by the
   channel you already use with them; it stops when Word closes or after 30

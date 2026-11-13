@@ -193,6 +193,37 @@ exit 0'
   [[ $output == *"--plan takes personal, family, school, business, enterprise, not teams"* ]]
 }
 
+@test "Word's first start on a hidden screen returns and stops Xvfb, which never exits by itself" {
+  fake_wine
+  mkdir -p "$OFFICE"
+  : >"$OFFICE/WINWORD.EXE"
+  # An Xvfb that makes its socket and runs until it is stopped.
+  # shellcheck disable=SC2016 # expanded by the stub
+  stub Xvfb 'mkdir -p /tmp/.X11-unix
+exec python3 -c "
+import os, signal, socket, sys, time
+path = \"/tmp/.X11-unix/X\" + sys.argv[1].lstrip(\":\")
+s = socket.socket(socket.AF_UNIX)
+s.bind(path)
+open(os.environ[\"HOME\"] + \"/xvfb.pid\", \"w\").write(str(os.getpid()))
+def stop(*_):
+    os.unlink(path)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
+while True:
+    time.sleep(1)
+" "$1"'
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  run timeout 20 bash -c 'set -euo pipefail; OH_ROOT=$1 OH_LIB=$1/lib/omarchohard OH_SHARE=$1/share/omarchohard
+    for m in common apps browser integrate open onedrive release doctor desktop native setup agent share; do source "$OH_LIB/$m.sh"; done
+    OMARCHOHARD_NATIVE_ABSORB=0 oh_native_step_absorb' _ "$OH_REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Word's first start is done"* ]]
+  grep -qF WINWORD.EXE "$HOME/wine.log"
+  run kill -0 "$(cat "$HOME/xvfb.pid")"
+  [ "$status" -ne 0 ]
+}
+
 @test "the ODT configuration carries the product, and SharedComputerLicensing only when asked" {
   # shellcheck disable=SC2016 # expanded by the inner bash
   run bash -c 'set -euo pipefail; OH_ROOT=$1 OH_LIB=$1/lib/omarchohard OH_SHARE=$1/share/omarchohard
@@ -308,16 +339,20 @@ esac'
   [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin/pw/pw" ]
 }
 
-@test "--lan binds the LAN address, never every address, for the sign-in page and the seed server" {
+@test "--lan binds the LAN address for the seed server only; the sign-in page refuses a plain LAN" {
   fake_installed
   docker_signin
   # shellcheck disable=SC2016
   stub ip '[ "$1 $2 $3" = "-4 route get" ] && echo "1.1.1.1 via 192.168.1.1 dev wlan0 src 192.168.1.20 uid 1000"'
   stub tailscale 'echo 100.64.1.2'
+  # The password typed on the page would cross a plain LAN unencrypted.
   run "$OH" native signin --remote --lan --port 6081
-  [ "$status" -eq 0 ]
-  grep -qF -- '-p 192.168.1.20:6081:6080' "$HOME/docker.log"
-  [[ $(printf '%s\n' "$output" | tail -n1) =~ ^Sign\ in\ here:\ http://192\.168\.1\.20:6081/#pw=[A-Za-z0-9]{8}\&device=[A-Za-z0-9.-]+$ ]]
+  [ "$status" -eq 1 ]
+  [[ $output == *"remote sign-in works only over Tailscale"* ]]
+  [ ! -e "$HOME/docker.log" ]
+  run "$OH" setup --tier native --yes --remote-signin --lan
+  [ "$status" -eq 1 ]
+  [[ $output == *"remote sign-in works only over Tailscale"* ]]
 
   make_seed "$NATIVE/$SEEDNAME"
   OMARCHOHARD_DRY_RUN=1 run "$OH" native seed serve --lan

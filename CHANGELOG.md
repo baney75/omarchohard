@@ -22,7 +22,7 @@ builds are not listed; they carry the version of the next release plus a
   product, and a seed for another product is refused. `--shared-computer`
   turns on shared computer activation for school and enterprise plans.
 - `omarchohard native signin --remote` shows only Office's sign-in window,
-  as a page on the device's Tailscale name (or `--lan` its LAN address) that
+  as a page on the device's Tailscale name only (never a plain LAN) that
   fits a phone, in light or dark mode, behind a one-time password carried
   after `#` in the link, and prints the link last as `Sign in here: ...`.
 - Native Office maps Segoe UI to Selawik, Microsoft's open-source stand-in

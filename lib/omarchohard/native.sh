@@ -247,9 +247,9 @@ oh_native_bind_ip() {
     ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1) || ip=''
     oh_ipv4_lan "$ip" || oh_die "no private LAN address found (got '${ip:-none}'); join the home or office network, or use the tailnet (drop --lan)"
   else
-    oh_have tailscale || oh_die "Tailscale is not installed; on a home network use --lan, or sign in on this screen: omarchohard native signin"
+    oh_have tailscale || oh_die "Tailscale is not installed; to share a seed on a home network add --lan; to sign in, use this device's screen: omarchohard native signin"
     ip=$(tailscale ip -4 2>/dev/null | head -n1) || ip=''
-    oh_ipv4_tailnet "$ip" || oh_die "Tailscale is not up (tailscale ip -4 gave '${ip:-nothing}'); start it (sudo tailscale up), or on a home network use --lan"
+    oh_ipv4_tailnet "$ip" || oh_die "Tailscale is not up (tailscale ip -4 gave '${ip:-nothing}'); start it (sudo tailscale up); to share a seed on a home network add --lan"
   fi
   printf '%s\n' "$ip"
 }
@@ -619,12 +619,14 @@ oh_native_step_absorb() {
   fi
   oh_say "Starting Word once on a hidden screen (30 seconds)..."
   local -a env
+  local word
   mapfile -t env < <(oh_native_env)
   env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
+  word=$!
   sleep "${OMARCHOHARD_NATIVE_ABSORB:-30}"
-  oh_native_ws -k 2>/dev/null || true
-  oh_native_ws -w 2>/dev/null || true
-  wait 2>/dev/null || true
+  oh_native_settle 1
+  # Only Word: a bare wait would also wait for Xvfb, which never exits.
+  wait "$word" 2>/dev/null || true
   oh_native_hidden_stop
   oh_ok "Word's first start is done"
 }
@@ -1049,15 +1051,17 @@ oh_native_link_host() {
 }
 
 # The sign-in. On this screen, Word opens. With --remote, Word opens on a
-# hidden screen shared as a web page on the tailnet address (or with --lan
-# the LAN address) only, behind a one-time password, and the link is
-# printed last, on a line of its own.
+# hidden screen shared as a web page on the tailnet address only, behind a
+# one-time password, and the link is printed last, on a line of its own.
+# Never on a plain LAN: the page is plain HTTP and VNC, so the person's
+# Microsoft password would cross the network unencrypted. Tailscale's
+# WireGuard tunnel is what encrypts it.
 oh_native_signin() {
-  local remote=0 lan=0 minutes=30 port=$OH_NATIVE_PORT email='' ip engine tag dir pw url i bin
+  local remote=0 minutes=30 port=$OH_NATIVE_PORT email='' ip engine tag dir pw url i bin
   while (($#)); do
     case $1 in
     --remote) remote=1 ;;
-    --lan) lan=1 ;;
+    --lan) oh_die "remote sign-in works only over Tailscale, which encrypts it; on a plain network the Microsoft password would cross it unencrypted. Sign in on this device instead: omarchohard native signin" ;;
     --minutes) minutes=${2:?--minutes needs a number} && shift ;;
     --port) port=${2:?--port needs a number} && shift ;;
     --email) email=${2:?--email needs an address} && shift ;;
@@ -1067,7 +1071,7 @@ oh_native_signin() {
       oh_ok "remote sign-in stopped"
       return 0
       ;;
-    *) oh_die "usage: omarchohard native signin [--remote [--lan] [--minutes N] [--port P]] [--email E] | --stop" ;;
+    *) oh_die "usage: omarchohard native signin [--remote [--minutes N] [--port P]] [--email E] | --stop" ;;
     esac
     shift
   done
@@ -1080,7 +1084,7 @@ oh_native_signin() {
     return 0
   fi
 
-  ip=$(oh_native_bind_ip "$lan")
+  ip=$(oh_native_bind_ip 0)
   engine=$(oh_native_engine) || oh_die "remote sign-in needs Docker or Podman for its hidden screen"
   ! oh_native_signin_running || oh_die "a remote sign-in is already running; stop it with: omarchohard native signin --stop"
   [[ -z $(oh_native_app_pids) ]] || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first; the sign-in starts Word on its own screen"
@@ -1092,7 +1096,7 @@ oh_native_signin() {
   if oh_dry; then
     oh_run "$engine" run -d --rm --name "$OH_NATIVE_SIGNIN" -p "$ip:$port:6080" -v "$dir/xsock:/tmp/.X11-unix" -v "$dir/pw:/run/omarchohard" "$tag"
     oh_run systemd-run --user --quiet --collect --unit="$OH_NATIVE_SIGNIN" "$bin" native signin-watch "$minutes" "unix:$dir/xsock/X0"
-    oh_native_link_host "$lan" "$ip"
+    oh_native_link_host 0 "$ip"
     printf 'Sign in here: http://%s:%s/#pw=<one-time password>&device=%s\n' "$OH_LINK_HOST" "$port" "$OH_LINK_DEVICE"
     return 0
   fi
@@ -1136,7 +1140,7 @@ oh_native_signin() {
   fi
   # The password travels in the link's fragment (after #), which browsers
   # never send to the server; the page takes it out of the address bar.
-  oh_native_link_host "$lan" "$ip"
+  oh_native_link_host 0 "$ip"
   url="http://$OH_LINK_HOST:$port/#pw=$pw&device=$OH_LINK_DEVICE"
   # The link is printed only once the page answers (about 2 s after start).
   for ((i = 0; i < 150; i++)); do

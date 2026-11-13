@@ -307,7 +307,7 @@ oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
   local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer tier='' desktop_failed=0
   local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' want_files='' optimize=0
-  local from='' sha='' plan='' shared=0 remote_signin=0 lan=0 json=0 native_failed=0 signin_url='' signin_note=''
+  local from='' sha='' plan='' shared=0 remote_signin=0 json=0 native_failed=0 signin_url='' signin_note=''
   local -a browsers labels native_args=()
   OH_SETUP_START=$SECONDS OH_SETUP_JSON_DONE=0
   # --json: everything for people goes to stderr, and stdout gets one JSON
@@ -337,7 +337,7 @@ oh_setup() {
     --plan) plan=${2:?--plan needs personal, family, school, business or enterprise} && shift ;;
     --shared-computer) shared=1 ;;
     --remote-signin) remote_signin=1 ;;
-    --lan) lan=1 ;;
+    --lan) oh_die "remote sign-in works only over Tailscale, which encrypts it; on a plain network the Microsoft password would cross it unencrypted. Sign in on this device instead: omarchohard native signin" ;;
     --json) json=1 ;;
     --apps)
       want_apps=$(oh_apps_parse "${2:?--apps needs a list, like word,excel,teams or all}") || exit 1
@@ -355,8 +355,8 @@ oh_setup() {
   case $want_prewarm in '' | on | off) ;; *) oh_die "--prewarm takes on or off" ;; esac
   case $tier in '' | native | desktop | web) ;; *) oh_die "--tier takes native, desktop or web" ;; esac
   [[ -z $plan ]] || oh_native_plan_check "$plan"
-  if [[ -n $from$sha$plan ]] || ((shared || remote_signin || lan)); then
-    [[ $tier == native ]] || oh_die "--from, --sha256, --plan, --shared-computer, --remote-signin and --lan go with --tier native"
+  if [[ -n $from$sha$plan ]] || ((shared || remote_signin)); then
+    [[ $tier == native ]] || oh_die "--from, --sha256, --plan, --shared-computer and --remote-signin go with --tier native"
   fi
   OH_SETUP_TIER=$tier OH_SETUP_EMAIL=$want_email
 
@@ -597,7 +597,6 @@ oh_setup() {
     local -a signin_args=()
     [[ -z $want_email ]] || signin_args+=(--email "$want_email")
     if ((remote_signin)); then
-      ((lan == 0)) || signin_args+=(--lan)
       if signin_url=$(oh_native_signin --remote "${signin_args[@]}"); then
         signin_url=${signin_url##*Sign in here: }
         oh_dry && signin_url=''

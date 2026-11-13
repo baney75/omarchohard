@@ -434,7 +434,7 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
 - **Sign-in.** Once, in Word's own window; it covers every app. `native
   signin --remote` is for a person at another device, a phone included:
   Word opens on a hidden screen, and a page on this device's Tailscale name
-  (or with `--lan` its home network address, never every address) shows
+  (Tailscale only, as it encrypts the password typed through it) shows
   only Office's sign-in window, at its real size or smaller, in light or
   dark mode. The link carries a one-time password after `#`, which browsers
   never send to the server, and the page takes it out of the address bar.
