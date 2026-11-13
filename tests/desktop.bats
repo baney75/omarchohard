@@ -441,6 +441,22 @@ teardown() {
   [ -z "${RDP_PID:-}" ] || kill "$RDP_PID" 2>/dev/null || true
 }
 
+@test "the host's Office copy is deleted once Office is installed, unless its download still runs" {
+  vm_stub
+  src=$XDG_DATA_HOME/omarchohard/vm/office-src
+  mkdir -p "$src/Office/Data"
+  office_status installing-office
+  phase >/dev/null
+  [ -d "$src" ]
+  stub systemctl 'exit 0'
+  office_status installed
+  phase >/dev/null
+  [ -d "$src" ]
+  stub systemctl 'exit 3'
+  phase >/dev/null
+  [ ! -e "$src" ]
+}
+
 @test "desktop status reports each install phase" {
   [ "$(phase)" = not-installed ]
   vm_stub

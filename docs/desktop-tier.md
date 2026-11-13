@@ -106,9 +106,10 @@ Office's install files on this machine, in a user service
   CDN gives for it.
 - The folder holds `progress` (rewritten as bytes arrive), then `ready` with
   the version, or `failed` with the reason. `prefetch.log` has each step.
-- A complete copy of the current version is kept and used again; an older
-  version is deleted. Delete the folder to free the space:
-  `rm -rf ~/.local/share/omarchohard/vm/office-src`.
+- A complete copy of the current version is used again by a later run; an
+  older version is deleted. Once Windows reports Office installed, the next
+  `desktop status`, `wait` or `doctor` deletes the folder, so the 3.2 GB do
+  not stay on disk.
 - In Windows, `office.ps1` waits for `ready` while `progress` keeps changing,
   then installs from the copy (`SourcePath`, with `AllowCdnFallback` for any
   file the copy lacks). It goes to the CDN instead when the host writes

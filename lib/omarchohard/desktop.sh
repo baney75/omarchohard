@@ -422,6 +422,13 @@ oh_office_prefetch() {
   printf 'ready: Office %s, %s bytes\n' "$v" "$total"
 }
 
+# Once Office is installed the copy is 3.2 GB nobody reads, so it goes.
+oh_office_src_drop() {
+  [[ -d $OH_OFFICE_SRC ]] || return 0
+  ! systemctl --user is-active --quiet "$OH_PREFETCH_UNIT.service" 2>/dev/null || return 0
+  rm -rf -- "$OH_OFFICE_SRC"
+}
+
 # Start the prefetch in the background, where it outlives this command.
 # Through systemd-run --user, as oh_desktop_autopause_arm does, and not as a
 # detached process: a user service is outside the terminal and its session,
@@ -632,10 +639,12 @@ oh_desktop_phase() {
     return 0
     ;;
   installed)
+    oh_office_src_drop
     OH_VM_PHASE=installing-office OH_VM_DETAIL="Office is installed; Windows is finishing its first start"
     return 0
     ;;
   ready)
+    oh_office_src_drop
     if ((OH_RDP_UP)); then
       OH_VM_PHASE=ready OH_VM_DETAIL="${OH_OFFICE_VERSION:+Office $OH_OFFICE_VERSION}"
     else
