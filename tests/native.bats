@@ -742,12 +742,16 @@ PY
   # shellcheck disable=SC2016
   stub ssh 'printf "%s\n" "$*" >>"$HOME/ssh.log"; sleep 1; exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
   args=(setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --email ada@school.edu --json)
-  "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/a.json" 2>"$BATS_TEST_TMPDIR/a.err" &
-  "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/b.json" 2>"$BATS_TEST_TMPDIR/b.err"
+  # No screen here, so the sign-in is a note, not a window.
+  WAYLAND_DISPLAY='' "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/a.json" 2>"$BATS_TEST_TMPDIR/a.err" &
+  WAYLAND_DISPLAY='' "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/b.json" 2>"$BATS_TEST_TMPDIR/b.err"
   wait
   [ "$(wc -l <"$HOME/ssh.log")" -eq 1 ]
   states=$(cat "$BATS_TEST_TMPDIR/a.json" "$BATS_TEST_TMPDIR/b.json" | jq -r .state | sort | paste -sd,)
-  [ "$states" = "needs_signin,ready" ]
+  [ "$states" = "needs_signin,ready" ] || {
+    tail -n 5 "$BATS_TEST_TMPDIR"/[ab].json "$BATS_TEST_TMPDIR"/[ab].err
+    false
+  }
   for f in a b; do
     [ "$(wc -l <"$BATS_TEST_TMPDIR/$f.json")" -eq 1 ]
     jq -e '(.seconds | type) == "number" and .tier == "native" and .email == "ada@school.edu" and has("signin_url")' "$BATS_TEST_TMPDIR/$f.json"
