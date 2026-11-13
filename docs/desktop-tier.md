@@ -173,10 +173,12 @@ Without copy-on-write, btrfs does not compress the image either. Once
 Windows is set up, `omarchohard desktop compress` stops the VM, rewrites the
 image as a copy-on-write file btrfs keeps zstd-compressed, and starts the VM
 again. On the test VM (2026-11-12) the image's 13 GB of data took 7.5 GB on
-disk afterward, and the copy took 45 seconds. `desktop wait` starts it in
-a user unit (`omarchohard-compress`) once the apps are in, so nobody has to
-know about it. An app opened during the copy starts the VM, and then the
-disk stays as it was: run `omarchohard desktop compress` later. The copy
+disk afterward, and the copy took 45 seconds. A new VM does it by itself,
+once: Windows writes `slim-done` to the inbox when the first boot's cleanup
+(DISM, about 8 minutes) has ended, and the next idle pause compresses the
+disk instead of pausing the VM. An app opened during the copy starts the VM
+again, and the disk stays as it was: run `omarchohard desktop compress`
+later. The copy
 needs free space for one more copy of the image, and running it again does
 nothing.
 

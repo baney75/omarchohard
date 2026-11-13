@@ -636,6 +636,7 @@ oh_desktop_phase() {
 
   case $OH_OFFICE_PHASE in
   failed)
+    oh_office_src_drop
     OH_VM_PHASE=failed OH_VM_DETAIL="Office did not install: ${OH_OFFICE_ERROR:-no reason given}; see C:\OEM\office.log in the VM (http://127.0.0.1:8006)"
     return 0
     ;;
@@ -772,19 +773,6 @@ oh_desktop_wait() {
   trap - INT
   oh_ok "Office is ready in the VM"
   oh_desktop_register
-  oh_desktop_compress_start
-}
-
-# Once the apps are in, compress the disk in a user unit, so the install
-# ends now: the VM stops for about a minute and starts again. An app opened
-# in that minute starts the VM, and the disk then stays as it was.
-oh_desktop_compress_start() {
-  local img=$OH_VM_DIR/storage/data.img
-  [[ -f $img && $(stat -f -c %T "${img%/*}" 2>/dev/null) == btrfs ]] && oh_have btrfs && oh_have systemd-run || return 0
-  [[ $(btrfs property get "$img" compression 2>/dev/null) != compression=zstd ]] || return 0
-  systemd-run --user --quiet --collect --unit=omarchohard-compress "${OH_UNIT_ENV[@]}" \
-    "$(oh_bin_path)" desktop compress >/dev/null 2>&1 || return 0
-  oh_dim "Compressing the VM disk in the background; the VM restarts once, in about a minute."
 }
 
 # Add the Office apps to the launcher through WinApps, without questions, and
@@ -795,19 +783,20 @@ oh_desktop_compress_start() {
 # a RemoteApp then shows "Another user is signed in" instead of the app.
 oh_winapps_setup() {
   local rc try
-  # WinApps will not set up over its own earlier install (exit 3), which a
-  # reinstalled VM finds (seen on the test VM, 2026-11-13). Its uninstall
-  # removes only WinApps' launcher scripts and app entries, which setup then
-  # writes again; winapps.conf stays.
-  if [[ -e $HOME/.local/bin/winapps ]]; then
-    (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user --uninstall) >/dev/null 2>&1 ||
-      oh_warn "could not remove the earlier WinApps setup"
-  fi
+  local cleared=0
   # The first boot signs Windows out of its console a moment after Office
   # reports ready, so a first exit 14 gets two more tries.
   for try in 1 2 3; do
     rc=0
     (cd "$OH_WINAPPS_DIR" && KRB5_CONFIG=$OH_RDP_KRB5 oh_run ./setup.sh "$@") || rc=$?
+    # WinApps will not set up over its own earlier install (exit 3), which a
+    # reinstalled VM finds (seen on the test VM, 2026-11-13). Its uninstall
+    # removes only WinApps' launcher scripts and app entries, which setup
+    # then writes again; winapps.conf stays.
+    if ((rc == 3 && cleared == 0)); then
+      cleared=1
+      (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user --uninstall) >/dev/null 2>&1 && continue
+    fi
     ((rc == 14 && try < 3)) || break
     oh_dim "RDP is not ready yet; trying again..."
     sleep "${OMARCHOHARD_DESKTOP_POLL:-15}"
@@ -937,6 +926,14 @@ oh_desktop_resume() {
   case ${state%% *} in
   running) ;;
   paused) oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null ;;
+  exited | created) if [[ -e $OH_VM_DIR/storage/data.img.compress ]]; then
+    # Stopped by the idle timer to compress its disk: starting it ends the
+    # copy, and the disk stays as it was.
+    oh_desktop_compose up -d >/dev/null || oh_die "the Windows VM did not start: omarchohard desktop up"
+  else
+    [[ ${1:-} != --try ]] || return 1
+    oh_die "the Windows VM is $state; start it with: omarchohard desktop up"
+  fi ;;
   *)
     [[ ${1:-} != --try ]] || return 1
     oh_die "the Windows VM is $state; start it with: omarchohard desktop up"
@@ -978,9 +975,27 @@ oh_desktop_autopause() {
     # Any FreeRDP of ours connected to the VM: the holder, desktop run, WinApps.
     oh_have pgrep || return 0
     pgrep -u "$(id -u)" -f -- "/v:${OH_WA[RDP_IP]}:${OH_WA[RDP_PORT]}( |$)" >/dev/null 2>&1 && return 0
+    if oh_desktop_compress_due; then
+      # Once, and without the lock, so an app opened during the copy can
+      # start the VM. The timer stays armed and pauses the VM next time.
+      exec {lk}>&-
+      rm -f -- "$OH_SLIM_DONE"
+      (oh_desktop_compress) >/dev/null 2>&1 || true
+      return 0
+    fi
     oh_desktop_compose pause >/dev/null 2>&1 || return 0
   fi
   systemctl --user stop "$OH_AUTOPAUSE_UNIT.timer" >/dev/null 2>&1 || true
+}
+
+# Windows writes slim-done to the inbox when slim.ps1 ends, after the first
+# boot's DISM cleanup, which stopping Windows would break. The first idle
+# pause after it compresses the disk instead, once, on btrfs.
+OH_SLIM_DONE=$OH_VM_INBOX/slim-done
+oh_desktop_compress_due() {
+  local img=$OH_VM_DIR/storage/data.img
+  [[ -f $OH_SLIM_DONE && -f $img ]] && oh_have btrfs &&
+    [[ $(stat -f -c %T "${img%/*}" 2>/dev/null) == btrfs && $(btrfs property get "$img" compression 2>/dev/null) != compression=zstd ]]
 }
 
 # Open any file under ~ or /run/media in Windows with its Windows default
@@ -1565,6 +1580,8 @@ oh_desktop_remove() {
   else
     oh_desktop_compose down
   fi
+  systemctl --user stop "$OH_PREFETCH_UNIT.service" >/dev/null 2>&1 || true
+  rm -rf -- "$OH_OFFICE_SRC"
   oh_config_set open_with web
   oh_desktop_addin_entry_remove
   oh_desktop_hypr_remove

@@ -376,29 +376,39 @@ esac"
   [ "$status" -ne 0 ]
 }
 
-@test "desktop wait compresses the disk in a user unit once the apps are in" {
+@test "the first idle pause after slim compresses the disk once, instead of pausing" {
   compress_stubs
-  rdp_listen
-  # shellcheck disable=SC2016
-  stub docker 'case "$1" in inspect) echo "running 0" ;; logs) echo "Booting Windows using QEMU..." ;; esac'
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\nAUTOPAUSE="on"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  stub pgrep 'exit 1'
+  # Before Windows says slim is done, an idle VM is paused as before.
+  run "$OH" desktop autopause
+  [ "$status" -eq 0 ]
+  grep -qx "docker compose -f $vm/compose.yaml pause" "$HOME/vm.log"
+  [ ! -e "$HOME/zstd" ]
+  rm "$HOME/vm.log"
   mkdir -p "$INBOX"
-  printf '{"phase":"ready","version":"16.0.1.2"}' >"$INBOX/office-status.json"
-  # shellcheck disable=SC2016
-  stub systemd-run 'printf "%s\n" "$@" >"$HOME/systemd-run.args"'
-  wa=$XDG_DATA_HOME/omarchohard/winapps
-  mkdir -p "$wa"
-  printf '#!/bin/sh\nexit 0\n' >"$wa/setup.sh"
-  chmod +x "$wa/setup.sh"
-  OMARCHOHARD_DESKTOP_POLL=0.1 run timeout 20 "$OH" desktop wait
+  : >"$INBOX/slim-done"
+  run "$OH" desktop autopause
   [ "$status" -eq 0 ]
-  grep -qx -- --unit=omarchohard-compress "$HOME/systemd-run.args"
-  [ "$(tail -n2 "$HOME/systemd-run.args")" = "$(printf 'desktop\ncompress')" ]
-  # A disk already compressed is left alone.
-  rm "$HOME/systemd-run.args"
-  printf '%s\n' "$vm/storage/data.img" >>"$HOME/zstd"
-  OMARCHOHARD_DESKTOP_POLL=0.1 run timeout 20 "$OH" desktop wait
-  [ "$status" -eq 0 ]
-  [ ! -e "$HOME/systemd-run.args" ]
+  grep -qx "btrfs filesystem defragment -czstd -- $vm/storage/data.img.compress" "$HOME/vm.log"
+  [ "$(tail -n 1 "$HOME/vm.log")" = "docker compose -f $vm/compose.yaml up -d" ]
+  [ "$(grep -c ' pause$' "$HOME/vm.log")" -eq 0 ]
+  [ ! -e "$INBOX/slim-done" ]
+}
+
+@test "opening an app while the idle timer compresses the disk starts the VM, which keeps the old disk" {
+  vm_stub
+  freerdp_stub
+  mkdir -p "$XDG_CONFIG_HOME/winapps" "$XDG_DATA_HOME/omarchohard/vm/storage"
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  : >"$HOME/Notes.docx"
+  printf 'exited 0\n' >"$HOME/vm.state"
+  run "$OH" desktop run "$HOME/Notes.docx"
+  [ "$status" -ne 0 ]
+  [[ $output == *"start it with: omarchohard desktop up"* ]]
+  : >"$XDG_DATA_HOME/omarchohard/vm/storage/data.img.compress"
+  run "$OH" desktop run "$HOME/Notes.docx"
+  grep -q "compose -f $XDG_DATA_HOME/omarchohard/vm/compose.yaml up -d" "$HOME/docker.log"
 }
 
 @test "desktop compress waits until desktop Office is set up" {
@@ -487,6 +497,11 @@ teardown() {
   stub systemctl 'exit 3'
   phase >/dev/null
   [ ! -e "$src" ]
+  # A failed install no longer reads it either.
+  mkdir -p "$src/Office/Data"
+  office_status failed
+  phase >/dev/null
+  [ ! -e "$src" ]
 }
 
 @test "desktop status reports each install phase" {
@@ -550,7 +565,8 @@ esac"
   wa=$XDG_DATA_HOME/omarchohard/winapps
   mkdir -p "$wa/.git" "$HOME/.local/bin"
   # shellcheck disable=SC2016
-  printf '#!/bin/sh\necho "$PWD $*" >>"$HOME/setup.log"\nprintf "#!/bin/sh\\n" >"$HOME/.local/bin/winapps"\nchmod +x "$HOME/.local/bin/winapps"\n' >"$wa/setup.sh"
+  # Like WinApps: exit 3 over its own earlier install.
+  printf '#!/bin/sh\necho "$PWD $*" >>"$HOME/setup.log"\ncase "$*" in *--uninstall*) rm -f "$HOME/.local/bin/winapps"; exit 0 ;; esac\n[ -e "$HOME/.local/bin/winapps" ] && exit 3\nprintf "#!/bin/sh\\n" >"$HOME/.local/bin/winapps"\nchmod +x "$HOME/.local/bin/winapps"\n' >"$wa/setup.sh"
   chmod +x "$wa/setup.sh"
   OMARCHOHARD_DESKTOP_POLL=0.1 run "$OH" desktop install --force --wait
   [ "$status" -eq 0 ]
@@ -562,7 +578,7 @@ esac"
   rm "$HOME/setup.log"
   run "$OH" desktop apps
   [ "$status" -eq 0 ]
-  printf '%s\n' "$wa --user --uninstall" "$wa --user" | diff - "$HOME/setup.log"
+  printf '%s\n' "$wa --user" "$wa --user --uninstall" "$wa --user" | diff - "$HOME/setup.log"
 }
 
 @test "Ctrl-C in desktop wait leaves the VM installing and says how to resume" {

@@ -21,8 +21,9 @@ builds are not listed; they carry the version of the next release plus a
   `setup --yes` without it keeps the current choice.
 - `omarchohard desktop compress` keeps the VM's disk image zstd-compressed on
   btrfs. On the test VM it cut the image from 13 GB to 7.5 GB on disk.
-  `desktop wait` (and `install --wait`) runs it in the background once the
-  apps are in: the VM stops for about 45 seconds and starts again.
+  A new VM runs it once by itself, at the first idle pause after Windows
+  finishes its first-boot cleanup: the VM stops for about 45 seconds and
+  starts again.
 - `.csv` files can open in Excel (`omarchohard files csv`).
 - `desktop install` downloads Office's install files on the host while
   Windows Setup runs, and Windows installs Office from that copy. On the test
@@ -45,8 +46,8 @@ builds are not listed; they carry the version of the next release plus a
 ### Fixed
 
 - `desktop wait` and `desktop apps` on a reinstalled VM: WinApps refused to
-  set up over its own earlier install, so no apps were added. Its earlier
-  install is now removed first.
+  set up over its own earlier install, so no apps were added. When it does,
+  that install is removed and setup runs again.
 - The idle-pause timer gets this shell's folders even where they are left to
   their defaults; the user manager's own `XDG_*` folders were used instead.
 - After a package update (AUR), the first open, launch or doctor sets the
