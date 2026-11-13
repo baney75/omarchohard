@@ -194,6 +194,11 @@ oh_desktop_compress() {
   avail=$(df -k --output=avail -- "$dir" | tail -n 1)
   ((avail > need + 1048576)) || oh_die "compressing the VM disk needs $((need / 1048576 + 2)) GB free in $dir"
   engine=$(oh_desktop_engine) || oh_die "Docker or Podman is required"
+  # Held from the stop to the restart, so an app opened meanwhile knows to
+  # start the VM again (oh_desktop_resume).
+  local lk
+  exec {lk}>"$OH_VM_DIR/compress.lock"
+  flock -n "$lk" || oh_die "the VM disk is being compressed already"
   state=$("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null) || state=missing
   case $state in
   running | paused | restarting)
@@ -214,6 +219,7 @@ oh_desktop_compress() {
     oh_desktop_compress_stopped "$engine" &&
     oh_run mv -f -- "$tmp" "$img" && ok=1
   rm -f -- "$tmp"
+  exec {lk}>&-
   case $state in
   running | paused | restarting) oh_desktop_compose up -d >/dev/null || oh_warn "the VM did not start again: omarchohard desktop up" ;;
   esac
@@ -919,21 +925,42 @@ oh_desktop_freerdp() {
 
 # Windows cannot reach a paused VM over RDP; WinApps' autopause pauses it
 # when idle and unpauses it on launch, so do the same.
+# True while desktop compress holds its lock: a lock, not a file, so a
+# compress killed halfway leaves nothing that looks like one.
+oh_desktop_compressing() {
+  local lk
+  [[ -e $OH_VM_DIR/compress.lock ]] || return 1
+  exec {lk}<"$OH_VM_DIR/compress.lock"
+  if flock -n "$lk"; then
+    exec {lk}<&-
+    return 1
+  fi
+  exec {lk}<&-
+}
+
 oh_desktop_resume() {
-  local engine state
+  local engine state i
   engine=$(oh_desktop_engine) || oh_die "Docker or Podman is required"
   state=$("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null || echo missing)
+  if oh_desktop_compressing; then
+    # Stopped, or going down, to compress its disk: once Windows is down,
+    # start it again, which ends the copy and keeps the disk as it was, and
+    # wait until it answers, so the app opens.
+    for ((i = 0; i < 130; i++)); do
+      [[ $("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null) == running ]] || break
+      sleep 1
+    done
+    oh_say "Starting Windows again; it was stopped to compress its disk."
+    oh_desktop_compose up -d >/dev/null || oh_die "the Windows VM did not start: omarchohard desktop up"
+    for ((i = 0; i < 120; i++)); do
+      oh_desktop_rdp_up && break
+      sleep 1
+    done
+    state=running
+  fi
   case ${state%% *} in
   running) ;;
   paused) oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null ;;
-  exited | created) if [[ -e $OH_VM_DIR/storage/data.img.compress ]]; then
-    # Stopped by the idle timer to compress its disk: starting it ends the
-    # copy, and the disk stays as it was.
-    oh_desktop_compose up -d >/dev/null || oh_die "the Windows VM did not start: omarchohard desktop up"
-  else
-    [[ ${1:-} != --try ]] || return 1
-    oh_die "the Windows VM is $state; start it with: omarchohard desktop up"
-  fi ;;
   *)
     [[ ${1:-} != --try ]] || return 1
     oh_die "the Windows VM is $state; start it with: omarchohard desktop up"

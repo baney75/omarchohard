@@ -406,8 +406,15 @@ esac"
   run "$OH" desktop run "$HOME/Notes.docx"
   [ "$status" -ne 0 ]
   [[ $output == *"start it with: omarchohard desktop up"* ]]
-  : >"$XDG_DATA_HOME/omarchohard/vm/storage/data.img.compress"
+  # A compress holds its lock from the stop to the restart.
+  flock "$XDG_DATA_HOME/omarchohard/vm/compress.lock" sleep 30 3>&- &
+  holder=$!
+  sleep 0.3
+  rdp_listen
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\nRDP_IP="127.0.0.1"\nRDP_PORT="%s"\n' "$(cat "$BATS_TEST_TMPDIR/rdp.port")" >"$XDG_CONFIG_HOME/winapps/winapps.conf"
   run "$OH" desktop run "$HOME/Notes.docx"
+  kill "$holder" 2>/dev/null || true
+  [[ $output == *"Starting Windows again"* ]]
   grep -q "compose -f $XDG_DATA_HOME/omarchohard/vm/compose.yaml up -d" "$HOME/docker.log"
 }
 
