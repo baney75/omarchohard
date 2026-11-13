@@ -45,8 +45,14 @@ if ($sig.Status -ne 'Valid' -or
 $channel = 'Current'
 
 # The host's copy: wait for its ready marker, which holds the version, while
-# its progress file keeps changing. No change for 2 minutes, a failed marker
-# or anything unexpected means the CDN instead.
+# its files keep growing. No growth for 2 minutes, a failed marker or
+# anything unexpected means the CDN instead.
+#
+# Growth is the total size in a listing of the folder, which the host sends
+# fresh, at most 10 seconds old. A file's contents are not: Windows keeps a
+# file it read over the share open, and the host's later writes never reach
+# it (seen on the test VM, 2026-11-13: the progress file read the same for
+# 2 minutes while the download went on).
 $source = ''
 $version = ''
 if (Test-Path C:\OEM\office-source.txt) {
@@ -65,13 +71,13 @@ if (Test-Path C:\OEM\office-source.txt) {
         Write-Output "office: the host could not download Office: $((Get-Content "$dir\failed" -Raw).Trim())"
         break
       }
-      $now = $null
-      try { $now = Get-Content "$dir\progress" -Raw -ErrorAction Stop } catch { }
+      $now = 0
+      try { $now = [long](Get-ChildItem -LiteralPath "$dir\Office" -Recurse -File -Force -ErrorAction Stop | Measure-Object Length -Sum).Sum } catch { }
       if ($now -ne $last) {
         $last = $now
         $changed = Get-Date
       } elseif (((Get-Date) - $changed).TotalSeconds -ge 120) {
-        Write-Output "office: the host's download has not moved for 2 minutes ($("$last".Trim()))"
+        Write-Output "office: the host's download has not grown for 2 minutes ($last bytes so far)"
         break
       }
       Start-Sleep -Seconds 5

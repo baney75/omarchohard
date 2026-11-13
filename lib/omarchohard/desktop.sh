@@ -219,6 +219,7 @@ oh_desktop_compress() {
   esac
   ((ok)) || oh_die "compressing the VM disk failed; the disk is unchanged"
   oh_say "The VM disk is compressed."
+}
 
 # Office prefetch. On the test VM (2026-11-12) Windows Setup took about 3.5
 # minutes and office.ps1 then spent about 12 minutes of a 15.5-minute
@@ -231,8 +232,8 @@ oh_desktop_compress() {
 # Tool's local source: Office/Data/v64_V.cab and Office/Data/V/ with
 # i640.cab, s640.cab, s641033.cab, stream.x64.x-none.dat and
 # stream.x64.en-us.dat. Next to it:
-#   progress  one line, rewritten as bytes arrive; office.ps1 gives up on the
-#             copy when it has not changed for 2 minutes
+#   progress  one line, rewritten as bytes arrive, for people; office.ps1
+#             gives up on the copy when its files stop growing for 2 minutes
 #   ready     the version, written last, once every file has its full size
 #   failed    the reason, instead of ready
 # Each is written to a .tmp file and moved into place, so Windows never reads
@@ -771,6 +772,19 @@ oh_desktop_wait() {
   trap - INT
   oh_ok "Office is ready in the VM"
   oh_desktop_register
+  oh_desktop_compress_start
+}
+
+# Once the apps are in, compress the disk in a user unit, so the install
+# ends now: the VM stops for about a minute and starts again. An app opened
+# in that minute starts the VM, and the disk then stays as it was.
+oh_desktop_compress_start() {
+  local img=$OH_VM_DIR/storage/data.img
+  [[ -f $img && $(stat -f -c %T "${img%/*}" 2>/dev/null) == btrfs ]] && oh_have btrfs && oh_have systemd-run || return 0
+  [[ $(btrfs property get "$img" compression 2>/dev/null) != compression=zstd ]] || return 0
+  systemd-run --user --quiet --collect --unit=omarchohard-compress "${OH_UNIT_ENV[@]}" \
+    "$(oh_bin_path)" desktop compress >/dev/null 2>&1 || return 0
+  oh_dim "Compressing the VM disk in the background; the VM restarts once, in about a minute."
 }
 
 # Add the Office apps to the launcher through WinApps, without questions, and
@@ -781,6 +795,14 @@ oh_desktop_wait() {
 # a RemoteApp then shows "Another user is signed in" instead of the app.
 oh_winapps_setup() {
   local rc try
+  # WinApps will not set up over its own earlier install (exit 3), which a
+  # reinstalled VM finds (seen on the test VM, 2026-11-13). Its uninstall
+  # removes only WinApps' launcher scripts and app entries, which setup then
+  # writes again; winapps.conf stays.
+  if [[ -e $HOME/.local/bin/winapps ]]; then
+    (cd "$OH_WINAPPS_DIR" && oh_run ./setup.sh --user --uninstall) >/dev/null 2>&1 ||
+      oh_warn "could not remove the earlier WinApps setup"
+  fi
   # The first boot signs Windows out of its console a moment after Office
   # reports ready, so a first exit 14 gets two more tries.
   for try in 1 2 3; do

@@ -110,10 +110,12 @@ Office's install files on this machine, in a user service
   older version is deleted. Once Windows reports Office installed, the next
   `desktop status`, `wait` or `doctor` deletes the folder, so the 3.2 GB do
   not stay on disk.
-- In Windows, `office.ps1` waits for `ready` while `progress` keeps changing,
+- In Windows, `office.ps1` waits for `ready` while the copy's files keep
+  growing (it reads their sizes from a folder listing, since Windows caches a
+  file it read over the share and never sees the host rewrite it),
   then installs from the copy (`SourcePath`, with `AllowCdnFallback` for any
   file the copy lacks). It goes to the CDN instead when the host writes
-  `failed` or `progress` has not changed for 2 minutes, and when setup.exe
+  `failed` or the files have not grown for 2 minutes, and when setup.exe
   fails with the copy it runs once more from the CDN, so a bad copy never
   fails the install. `C:\OEM\office.log` says which source it used.
 - Without `curl`, `bsdtar` (libarchive) or `flock`, there is no download and

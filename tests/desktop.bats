@@ -244,6 +244,10 @@ OFFICE_V=16.0.20527.20196
   grep -qxF '      if (Test-Path "$dir\ready") {' "$ps"
   grep -qxF '      if (Test-Path "$dir\failed") {' "$ps"
   grep -qxF '      } elseif (((Get-Date) - $changed).TotalSeconds -ge 120) {' "$ps"
+  # Growth comes from a folder listing; a file read over the share stays
+  # cached in Windows, so the progress file is never what it watches.
+  grep -qF 'Get-ChildItem -LiteralPath "$dir\Office" -Recurse -File' "$ps"
+  [ "$(grep -cF '$dir\progress' "$ps")" -eq 0 ]
   grep -qF 'SourcePath=`"$([Security.SecurityElement]::Escape($sourcePath))`" Version=`"$sourceVersion`" AllowCdnFallback=`"True`"' "$ps"
   # The local run first; when it fails, one more run with no SourcePath.
   local_run=$(grep -nxF '  $code = Invoke-OfficeSetup $source $version' "$ps" | cut -d: -f1)
@@ -370,6 +374,31 @@ esac"
   [ ! -e "$vm/storage/data.img.compress" ]
   run grep -qxF "$vm/storage/data.img" "$HOME/zstd"
   [ "$status" -ne 0 ]
+}
+
+@test "desktop wait compresses the disk in a user unit once the apps are in" {
+  compress_stubs
+  rdp_listen
+  # shellcheck disable=SC2016
+  stub docker 'case "$1" in inspect) echo "running 0" ;; logs) echo "Booting Windows using QEMU..." ;; esac'
+  mkdir -p "$INBOX"
+  printf '{"phase":"ready","version":"16.0.1.2"}' >"$INBOX/office-status.json"
+  # shellcheck disable=SC2016
+  stub systemd-run 'printf "%s\n" "$@" >"$HOME/systemd-run.args"'
+  wa=$XDG_DATA_HOME/omarchohard/winapps
+  mkdir -p "$wa"
+  printf '#!/bin/sh\nexit 0\n' >"$wa/setup.sh"
+  chmod +x "$wa/setup.sh"
+  OMARCHOHARD_DESKTOP_POLL=0.1 run timeout 20 "$OH" desktop wait
+  [ "$status" -eq 0 ]
+  grep -qx -- --unit=omarchohard-compress "$HOME/systemd-run.args"
+  [ "$(tail -n2 "$HOME/systemd-run.args")" = "$(printf 'desktop\ncompress')" ]
+  # A disk already compressed is left alone.
+  rm "$HOME/systemd-run.args"
+  printf '%s\n' "$vm/storage/data.img" >>"$HOME/zstd"
+  OMARCHOHARD_DESKTOP_POLL=0.1 run timeout 20 "$OH" desktop wait
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/systemd-run.args" ]
 }
 
 @test "desktop compress waits until desktop Office is set up" {
@@ -529,6 +558,11 @@ esac"
   [ "$(cat "$HOME/setup.log")" = "$wa --user --setupAllOfficiallySupportedApps" ]
   [ -f "$XDG_DATA_HOME/omarchohard/vm/oem/office-info.ps1" ]
   grep -qx 'open_with=desktop' "$XDG_CONFIG_HOME/omarchohard/config"
+  # A reinstalled VM: WinApps' earlier install goes first, or setup stops.
+  rm "$HOME/setup.log"
+  run "$OH" desktop apps
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$wa --user --uninstall" "$wa --user" | diff - "$HOME/setup.log"
 }
 
 @test "Ctrl-C in desktop wait leaves the VM installing and says how to resume" {
