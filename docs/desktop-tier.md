@@ -132,6 +132,13 @@ can fail on it. If `chattr` fails, the install warns and goes on. VMs
 installed before 0.2.0 keep their Docker volume (`data`); the install
 detects the old `compose.yaml` and leaves it in place.
 
+Without copy-on-write, btrfs does not compress the image either. Once
+Windows is set up, `omarchohard desktop compress` stops the VM, rewrites the
+image as a copy-on-write file btrfs keeps zstd-compressed, and starts the VM
+again. On the test VM (2026-11-12) the image's 13 GB of data took 7.5 GB on
+disk afterward. The copy needs free space for one more copy of the image,
+and running it again does nothing.
+
 The image is pinned to `ghcr.io/dockur/windows:6.06`.
 
 VMs installed before 0.2.0 also keep their old first-boot scripts in
