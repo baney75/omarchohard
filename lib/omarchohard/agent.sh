@@ -178,7 +178,7 @@ oh_probe() {
   printf '"tier":{"value":%s,"why":%s}' "$(oh_json_str "$R_TIER")" "$(oh_json_str "$R_WHY_TIER")"
   printf '},"needs_person":["Microsoft sign-in (omarchohard login)","OneDrive sign-in (omarchohard onedrive setup)"'
   if [[ $R_NATIVE == yes ]] || oh_native_ready; then
-    printf ',"Office sign-in in Word (omarchohard native signin, or native signin --remote for a one-time link)"'
+    printf ',"Office sign-in in Word (omarchohard native signin, or native signin --remote for a sign-in link)"'
   fi
   printf ']}\n'
 }

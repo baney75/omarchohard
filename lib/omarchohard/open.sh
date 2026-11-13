@@ -31,7 +31,7 @@ oh_open() {
 oh_open_one() {
   local app=$1 target=$2
   case $target in
-  mailto:*) oh_app_window "$(oh_mailto_url "$target")" 0 ;;
+  mailto:*) oh_native_mailto "$target" || oh_app_window "$(oh_mailto_url "$target")" 0 ;;
   msteams:*) oh_app_window "$(oh_msteams_url "$target")" 0 ;;
   ms-word:* | ms-excel:* | ms-powerpoint:* | onenote:*) oh_open_office_uri "$target" ;;
   https://* | http://*) oh_app_window "$target" 0 ;;

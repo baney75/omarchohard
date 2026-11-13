@@ -106,22 +106,153 @@ oh_native_env() {
   printf '%s\n' "WINEPREFIX=$OH_NATIVE_PREFIX" WINEDEBUG=-all "WINEDLLOVERRIDES=winemenubuilder.exe=d${1:+;$1}"
 }
 
+# The sandbox (bubblewrap), experimental and off unless
+# OMARCHOHARD_NATIVE_SANDBOX=1. Office then runs with the whole system
+# read-only and the person's home hidden from its files: only the prefix,
+# Documents, Downloads, Desktop, Pictures and the OneDrive folder are there,
+# writable. The network stays. Every Wine command, sandboxed or not, sees
+# the same /tmp (OH_NATIVE_TMP), where Wine keeps its server socket, so all
+# of them share one Wine server. It is not a security boundary yet: with no
+# pid namespace (Wine's processes find each other through /proc), a process
+# inside can still reach the home through /proc/PID/root of one outside.
+# Off, or without a working bwrap, Office runs as plain Wine.
+OH_NATIVE_TMP=$OH_STATE_DIR/native/tmp
+
+oh_native_bwrap_ok() {
+  [[ ${OMARCHOHARD_NATIVE_SANDBOX:-0} == 1 ]] && oh_have bwrap || return 1
+  if [[ -z ${OH_NATIVE_BWRAP:-} ]]; then
+    OH_NATIVE_BWRAP=0
+    bwrap --ro-bind / / -- true >/dev/null 2>&1 && OH_NATIVE_BWRAP=1
+  fi
+  ((OH_NATIVE_BWRAP))
+}
+
+# The person's folders Office may use: XDG's names, else the usual ones,
+# and the OneDrive folder.
+oh_native_user_dirs() {
+  local key d
+  for key in DOCUMENTS DOWNLOAD DESKTOP PICTURES; do
+    d=$(xdg-user-dir "$key" 2>/dev/null || true)
+    if [[ -z $d || $d == "$HOME" ]]; then
+      case $key in
+      DOCUMENTS) d=$HOME/Documents ;;
+      DOWNLOAD) d=$HOME/Downloads ;;
+      DESKTOP) d=$HOME/Desktop ;;
+      PICTURES) d=$HOME/Pictures ;;
+      esac
+    fi
+    printf '%s\n' "$d"
+  done
+  d=$(oh_config_get onedrive_dir 2>/dev/null || true)
+  [[ -z $d ]] || printf '%s\n' "$d"
+}
+
+# oh_native_box tmp|app|server [DIR...]: sets OH_BOX, the command prefix.
+# tmp only moves /tmp (installs, and Wine server commands that start no
+# server). app is the sandbox, with each DIR also bound writable. server is
+# the same sandbox for the Wine server the apps use, which outlives the
+# command that starts it. The server opens files for its apps, so it must
+# see no more than they do.
+oh_native_box() {
+  local mode=$1 d uid rt=${XDG_RUNTIME_DIR:-}
+  shift
+  OH_BOX=()
+  oh_native_bwrap_ok || return 0
+  oh_dry || { mkdir -p "$OH_NATIVE_TMP" && chmod 700 "${OH_NATIVE_TMP%/*}" "$OH_NATIVE_TMP"; }
+  if [[ $mode == tmp ]]; then
+    OH_BOX=(bwrap --dev-bind / / --bind "$OH_NATIVE_TMP" /tmp --ro-bind-try /tmp/.X11-unix /tmp/.X11-unix --)
+    return 0
+  fi
+  uid=$(id -u)
+  OH_BOX=(bwrap --ro-bind / / --dev-bind /dev /dev)
+  for d in /home /root /mnt /media /run/media "$HOME" "/run/user/$uid"; do
+    [[ -d $d ]] && OH_BOX+=(--tmpfs "$d")
+  done
+  OH_BOX+=(--bind "$OH_NATIVE_TMP" /tmp --ro-bind-try /tmp/.X11-unix /tmp/.X11-unix)
+  # Sound, and the X authority file when there is one.
+  [[ -z $rt ]] || OH_BOX+=(--ro-bind-try "$rt/pipewire-0" "$rt/pipewire-0" --ro-bind-try "$rt/pulse/native" "$rt/pulse/native")
+  [[ -z ${XAUTHORITY:-} || ! -f $XAUTHORITY ]] || OH_BOX+=(--ro-bind "$XAUTHORITY" "$XAUTHORITY")
+  OH_BOX+=(--ro-bind "$OH_WINE_DIR" "$OH_WINE_DIR" --bind "$OH_NATIVE_PREFIX" "$OH_NATIVE_PREFIX")
+  while IFS= read -r d; do
+    [[ -n $d && -d $d ]] && OH_BOX+=(--bind "$d" "$d")
+  done < <(oh_native_user_dirs)
+  for d in "$@"; do
+    [[ -d $d ]] && OH_BOX+=(--bind "$d" "$d")
+  done
+  # Marks what runs in the sandbox, so an app never uses a server from
+  # outside it (oh_native_outside_server).
+  OH_BOX+=(--setenv OH_NATIVE_BOX app)
+  # No --unshare-pid: Wine's processes find each other through /proc.
+  if [[ $mode == server ]]; then
+    OH_BOX+=(--unshare-ipc --new-session --)
+  else
+    OH_BOX+=(--unshare-ipc --die-with-parent --new-session --)
+  fi
+}
+
 oh_native_wine() {
   local -a env
   mapfile -t env < <(oh_native_env "${OH_NATIVE_OVERRIDES:-}")
-  oh_run env "${env[@]}" "$OH_WINE" "$@"
+  oh_native_box tmp
+  oh_run "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$@"
 }
 
-oh_native_ws() { oh_run env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" "$@"; }
+oh_native_ws() {
+  oh_native_box tmp
+  oh_run "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" "$@"
+}
+
+# oh_native_ws_start ARG...: start the apps' Wine server (-p600, -p) in the
+# sandbox. With one already running, it exits at once.
+oh_native_ws_start() {
+  oh_native_box server
+  oh_run "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" "$@"
+}
+
+# Wine servers of this prefix, sandboxed or not. One pid per line.
+oh_native_server_pids() {
+  local pid
+  for pid in $(pgrep -u "$(id -u)" -x wineserver 2>/dev/null || true); do
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF -- "WINEPREFIX=$OH_NATIVE_PREFIX" && printf '%s\n' "$pid"
+  done
+  return 0
+}
+
+# A Wine server for this prefix that an install or update started outside
+# the sandbox. It sees the whole home, and opens files for any app that
+# attaches to it.
+oh_native_outside_server() {
+  local pid
+  oh_native_bwrap_ok || return 1
+  for pid in $(oh_native_server_pids); do
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF OH_NATIVE_BOX=app || return 0
+  done
+  return 1
+}
+
+# Stop this prefix's Wine server and wait for it to go. Fails when one is
+# still running after 5 s: one in another /tmp (started with the sandbox
+# on, say, when it is now off) is out of reach of `wineserver -k`.
+oh_native_server_stop() {
+  local i
+  [[ -n $(oh_native_server_pids) ]] || return 0
+  oh_native_ws -k 2>/dev/null || true
+  for ((i = 0; i < 25; i++)); do
+    [[ -n $(oh_native_server_pids) ]] || return 0
+    sleep 0.2
+  done
+  return 1
+}
 
 # Wait up to SECONDS for every process of the prefix to end, then stop the
 # rest. Office leaves its Click-to-Run service running, so the wait alone may
 # never end. wineserver saves the registry as it exits.
 oh_native_settle() {
   oh_dry && return 0
-  timeout "${1:-60}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null && return 0
-  env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -k 2>/dev/null || true
-  env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null || true
+  oh_native_box tmp
+  timeout "${1:-60}" "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null && return 0
+  "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -k 2>/dev/null || true
+  "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null || true
 }
 
 oh_native_stop_wine() {
@@ -423,6 +554,7 @@ oh_native_unpack() {
     oh_native_unpack_fail "the seed from $src holds ${product:-an unknown product} (Microsoft 365 $(oh_native_plan_words "${product:-unknown}")), but --plan $OH_NATIVE_PLAN needs $want"
   fi
   mv -- "$stage/prefix" "$OH_NATIVE_PREFIX"
+  chmod 700 -- "$OH_NATIVE_PREFIX"
   rmdir -- "$stage" 2>/dev/null || true
   v=$(oh_native_office_version) || v=unknown
   if ((keep)); then
@@ -430,6 +562,7 @@ oh_native_unpack() {
     name=$OH_NATIVE_DIR/seed-${product%%,*}-$v.tar.zst
     mv -f -- "$part" "$name"
     printf '%s\n' "$sum" >"$name.sha256"
+    chmod 600 -- "$name" "$name.sha256"
   fi
   oh_ok "Office $v (${product:-unknown product}) copied in; seed kept at $(oh_native_seed_file)"
 }
@@ -471,6 +604,7 @@ oh_native_step_prefix() {
   oh_say "Making the Wine prefix (about 50 seconds)..."
   if [[ ! -f $OH_NATIVE_PREFIX/system.reg ]]; then
     oh_run mkdir -p "$OH_NATIVE_PREFIX"
+    oh_run chmod 700 "$OH_NATIVE_PREFIX"
     # Mono and Gecko prompts would wait for a click while the prefix is made.
     WINEARCH=win64 OH_NATIVE_OVERRIDES='mscoree=d;mshtml=d' oh_native_wine wineboot -u
     oh_native_settle 120
@@ -624,7 +758,8 @@ oh_native_step_absorb() {
   local -a env
   local word
   mapfile -t env < <(oh_native_env)
-  env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
+  oh_native_box app
+  "${OH_BOX[@]}" env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
   word=$!
   sleep "${OMARCHOHARD_NATIVE_ABSORB:-30}"
   oh_native_settle 1
@@ -688,6 +823,7 @@ oh_native_seed_write() {
   [[ -z $old ]] || rm -f -- "$old" "$old.sha256"
   mv -f -- "$part" "$name"
   sha256sum -- "$name" | awk '{ print $1 }' >"$name.sha256"
+  chmod 600 -- "$name" "$name.sha256"
   oh_ok "seed: $name ($(oh_native_size "$(stat -c %s -- "$name")"))"
 }
 
@@ -732,6 +868,8 @@ oh_native_install() {
       oh_die "--shared-computer is for --plan school or enterprise; Microsoft does not support shared computer activation for ${OH_NATIVE_PLAN:-personal} plans"
   fi
   [[ $(uname -m) == x86_64 ]] || oh_die "native Office needs an x86_64 machine; wine-altars is built for x86_64"
+  # Office, its seed and the sign-in Office keeps are this user's alone.
+  umask 077
   for tool in tar zstd curl sha256sum flock; do
     oh_have "$tool" || oh_die "native Office needs $tool"
   done
@@ -756,8 +894,10 @@ oh_native_install() {
       oh_die "Office here is $have (Microsoft 365 $(oh_native_plan_words "$have")), not the $product --plan $OH_NATIVE_PLAN needs; remove it first: omarchohard native uninstall"
     oh_native_wine_install
     oh_native_fonts_ok || oh_native_step_fonts
+    oh_dry || chmod 700 -- "$OH_NATIVE_PREFIX"
     oh_ok "native Office is already installed (omarchohard native status)"
     oh_dry || oh_config_set open_with native
+    oh_native_update_timer on
     return 0
   fi
   # A fresh install without --plan: personal, said out loud. (Checked only
@@ -798,6 +938,7 @@ oh_native_install() {
     oh_native_seed_write "$product"
   fi
   [[ -z $email ]] || oh_say "Office has no setting that fills in the sign-in address; sign in as $email in Office's window."
+  oh_native_update_timer on
   oh_dry && return 0
   : >"$OH_NATIVE_COMPLETE"
   oh_config_set open_with native
@@ -945,20 +1086,93 @@ oh_native_run() {
   oh_native_ready || oh_die "native Office is not set up yet (omarchohard native install)"
   oh_native_has "$app" || oh_die "$(oh_app_name "$app") is not installed in $OH_NATIVE_PREFIX"
   [[ -n ${DISPLAY:-} ]] || oh_die "no X display (DISPLAY is not set); run this in your desktop session, where Xwayland shows Office's windows"
-  local -a args=() env
+  local -a args=()
   for file in "$@"; do
     [[ $file != file://* ]] || file=$(oh_file_uri_path "$file")
     [[ -e $file ]] || oh_die "no such file: $file"
     abs=$(readlink -f -- "$file")
+    oh_native_reachable "$abs" || abs=$(oh_native_copy_in "$abs")
     args+=("$(oh_native_win_path "$abs")")
   done
+  oh_native_start "$exe" "${args[@]}"
+}
+
+# Whether Office can save FILE where it is: in one of its folders, or
+# anywhere when the sandbox is off. Office's folders are fixed when its Wine
+# server starts, so a file elsewhere (~/notes.docx, /tmp/x.docx) is never
+# made reachable by binding its folder: that could be the whole home.
+oh_native_reachable() {
+  local d
+  oh_native_bwrap_ok || return 0
+  while IFS= read -r d; do
+    [[ -n $d && -d $d ]] || continue
+    d=$(readlink -f -- "$d")
+    [[ $1 == "${d%/}"/* ]] && return 0
+  done < <(oh_native_user_dirs)
+  return 1
+}
+
+# A copy of FILE in Office's own /tmp; prints the path Office sees.
+oh_native_copy_in() {
+  local f=$1 d name=${1##*/}
+  oh_warn "$name is outside the folders Office can reach (Documents, Downloads, Desktop, Pictures and OneDrive), so this opens a copy; save it into one of them to keep your changes"
+  # Opened from a file manager, nobody reads stderr: say it on screen too.
+  if [[ ! -t 2 ]] && ! oh_dry && oh_have notify-send; then
+    notify-send -a omarchohard -u critical "Office opened a copy of $name" \
+      "$name is outside Documents, Downloads, Desktop, Pictures and OneDrive. Save it into one of them to keep your changes." >/dev/null 2>&1 || true
+  fi
+  if oh_dry; then
+    printf 'would run: cp -- %q %q\n' "$f" "$OH_NATIVE_TMP/opened/" >&2
+    printf '/tmp/opened/%s\n' "$name"
+    return 0
+  fi
+  mkdir -p -- "$OH_NATIVE_TMP/opened"
+  d=$(mktemp -d "$OH_NATIVE_TMP/opened/XXXXXX")
+  cp -- "$f" "$d/$name" || oh_die "could not copy $f for Office"
+  printf '/tmp/opened/%s/%s\n' "${d##*/}" "$name"
+}
+
+# oh_native_start EXE [ARG...]: the app in the sandbox, with the same
+# folders as its Wine server.
+oh_native_start() {
+  local exe=$1
+  local -a env
+  shift
+  oh_native_drive_o
   # The Wine server stays up 10 minutes after the last app closes, so the
   # next start is the warm one (1 to 2.5 s, not 4 to 6 s). With one already
   # running, this one exits at once.
-  oh_run env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -p600 >/dev/null 2>&1 || true
+  if oh_native_outside_server; then
+    flock -n "$OH_STATE_DIR/native-install.lock" true 2>/dev/null ||
+      oh_die "native Office is being installed or updated; open it again when that finishes"
+    oh_native_ws -k 2>/dev/null || true
+  fi
+  oh_native_ws_start -p600 >/dev/null 2>&1 || true
   mapfile -t env < <(oh_native_env)
-  oh_spawn env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/$exe" "${args[@]}"
+  oh_native_box app
+  oh_spawn "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/$exe" "$@"
   oh_native_idle_start
+}
+
+# The OneDrive folder as drive O: in Windows, when there is one.
+oh_native_drive_o() {
+  local dir link=$OH_NATIVE_PREFIX/dosdevices/o:
+  dir=$(oh_config_get onedrive_dir 2>/dev/null || true)
+  if [[ -n $dir && -d $dir ]]; then
+    [[ $(readlink -- "$link" 2>/dev/null) == "$dir" ]] || oh_run ln -sfn -- "$dir" "$link"
+  elif [[ -L $link ]]; then
+    oh_run rm -f -- "$link"
+  fi
+}
+
+# A mailto: link in Outlook, when native Office is preferred, has Outlook,
+# and mail links are on. Returns 1 otherwise, so the web app takes it.
+oh_native_mailto() {
+  [[ $(oh_config_get open_with) == native && $(oh_config_get mail) != 0 && -n ${DISPLAY:-} ]] || return 1
+  oh_native_ready && oh_native_has outlook || return 1
+  # Outlook's command-line switches: /c ipm.note makes a message, /m fills
+  # in the address (and a ?subject=... after it).
+  oh_native_start OUTLOOK.EXE /c ipm.note /m "${1#mailto:}"
 }
 
 # Office's Click-to-Run service keeps the prefix running after the last app
@@ -985,7 +1199,7 @@ oh_native_idle_watch() {
   flock -n "$lk" || return 0
   while ((idle < limit)); do
     sleep "$step"
-    if [[ -n $(oh_native_app_pids) ]] || oh_native_signin_running; then idle=0; else idle=$((idle + step)); fi
+    if [[ -n $(oh_native_app_pids) ]] || oh_native_signin_running || oh_native_prewarm_on; then idle=0; else idle=$((idle + step)); fi
   done
   oh_native_stop_wine
 }
@@ -1005,7 +1219,7 @@ oh_native_signin_running() {
   [[ $("$engine" inspect -f '{{.State.Running}}' "$OH_NATIVE_SIGNIN" 2>/dev/null) == true ]]
 }
 
-# Where the remote session keeps its X socket and the one-time password
+# Where the remote session keeps its X socket and the session's password
 # file: the runtime folder (memory, this user only) when there is one.
 oh_native_signin_dir() {
   local base=${XDG_RUNTIME_DIR:-}
@@ -1034,18 +1248,37 @@ oh_native_signin_stop() {
 }
 
 # `native signin-watch MINUTES DISPLAY`, the remote session's own process:
-# Word on the hidden screen until it closes or the time is up, then
-# everything stops.
+# Word on the hidden screen until the time is up. Word closing (a restart
+# after sign-in, a license box, a crash) must not end the page the person
+# has open, so Word starts again; each exit goes to the journal and to
+# $OH_STATE_DIR/native/signin.log with its time. `signin --stop` ends it too.
 oh_native_signin_watch() {
-  local minutes=${1:?} display=${2:?} rc=0
+  local minutes=${1:?} display=${2:?} rc=0 end left log sock
   local -a env
   [[ $minutes =~ ^[0-9]+$ ]] || oh_die "minutes must be a number"
   trap 'oh_native_ws -k 2>/dev/null; oh_native_signin_stop; exit 143' TERM INT
   mapfile -t env < <(oh_native_env)
-  timeout -k 10 "$((minutes * 60))" env DISPLAY="$display" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 || rc=$?
+  sock=$(oh_native_signin_dir)/xsock
+  oh_native_box app "$sock"
+  log=$OH_STATE_DIR/native/signin.log
+  mkdir -p -- "${log%/*}"
+  printf '%s remote sign-in started for %s minutes\n' "$(date -u +%FT%TZ)" "$minutes" >>"$log"
+  end=$((SECONDS + minutes * 60))
+  while :; do
+    left=$((end - SECONDS))
+    ((left > 0)) || break
+    rc=0
+    timeout -k 10 "$left" "${OH_BOX[@]}" env DISPLAY="$display" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 || rc=$?
+    ((rc != 124 && rc != 137)) || break
+    # The screen is gone (`signin --stop` from another shell): nothing to show.
+    [[ -S ${display#unix:} ]] || break
+    printf '%s Word exited (code %s); starting it again\n' "$(date -u +%FT%TZ)" "$rc" | tee -a -- "$log"
+    sleep 2
+  done
   oh_native_ws -k 2>/dev/null || true
   oh_native_signin_stop
-  if ((rc == 124 || rc == 137)); then oh_say "remote sign-in: stopped after $minutes minute$( ((minutes == 1)) || echo s)"; else oh_say "remote sign-in: Word closed"; fi
+  printf '%s remote sign-in stopped\n' "$(date -u +%FT%TZ)" >>"$log"
+  oh_say "remote sign-in: stopped after $minutes minute$( ((minutes == 1)) || echo s)"
 }
 
 # The name the link uses for this device: its tailnet DNS name (MagicDNS),
@@ -1067,7 +1300,7 @@ oh_native_link_host() {
 
 # The sign-in. On this screen, Word opens. With --remote, Word opens on a
 # hidden screen shared as a web page on the tailnet address only, behind a
-# one-time password, and the link is printed last, on a line of its own.
+# password new for each session, and the link is printed last, on a line of its own.
 # Never on a plain LAN: the page is plain HTTP and VNC, so the person's
 # Microsoft password would cross the network unencrypted. Tailscale's
 # WireGuard tunnel is what encrypts it.
@@ -1112,7 +1345,7 @@ oh_native_signin() {
     oh_run "$engine" run -d --rm --name "$OH_NATIVE_SIGNIN" -p "$ip:$port:6080" -v "$dir/xsock:/tmp/.X11-unix" -v "$dir/pw:/run/omarchohard" "$tag"
     oh_run systemd-run --user --quiet --collect --unit="$OH_NATIVE_SIGNIN" "$bin" native signin-watch "$minutes" "unix:$dir/xsock/X0"
     oh_native_link_host 0 "$ip"
-    printf 'Sign in here: http://%s:%s/#pw=<one-time password>&device=%s\n' "$OH_LINK_HOST" "$port" "$OH_LINK_DEVICE"
+    printf 'Sign in here: http://%s:%s/#pw=<password>&device=%s\n' "$OH_LINK_HOST" "$port" "$OH_LINK_DEVICE"
     return 0
   fi
   rm -rf -- "$dir"
@@ -1167,12 +1400,13 @@ oh_native_signin() {
     notify-send -a omarchohard -i omarchohard "Sign in to Office" "Open on another device on your network: $url" 2>/dev/null || true
   fi
   oh_say "Word is starting on a hidden screen, shared only on $ip${email:+; sign in as $email}."
-  oh_say "It stops when Word closes or after $minutes minute$( ((minutes == 1)) || echo s) (now: omarchohard native signin --stop)."
+  oh_say "Word starts again if it closes; the page stops after $minutes minute$( ((minutes == 1)) || echo s) (now: omarchohard native signin --stop)."
   printf 'Sign in here: %s\n' "$url"
 }
 
 oh_native_status() {
   local json=0 wine_ver='' office_ver='' product='' seed sha='' seed_bytes=0 remote=false serving=false app wine_bytes native_bytes
+  local seed_ver='' seed_old=false latest checked result result_at timer=false
   local -a found=()
   case ${1:-} in --json) json=1 ;; '') ;; *) oh_die "usage: omarchohard native status [--json]" ;; esac
   oh_native_wine_ok && wine_ver=$("$OH_WINE" --version 2>/dev/null || echo "wine-altars $OH_WINE_TAG")
@@ -1186,6 +1420,14 @@ oh_native_status() {
   fi
   oh_native_signin_running && remote=true
   oh_native_serving && serving=true
+  # The seed's version is in its name; an update leaves the seed behind.
+  [[ ${seed##*/} =~ -([0-9]+(\.[0-9]+){3})\.tar\.zst$ ]] && seed_ver=${BASH_REMATCH[1]}
+  ! oh_native_newer "$office_ver" "$seed_ver" || [[ -z $seed_ver ]] || seed_old=true
+  latest=$(oh_native_update_get latest || true)
+  checked=$(oh_native_update_get checked || true)
+  result=$(oh_native_update_get result || true)
+  result_at=$(oh_native_update_get result_at || true)
+  oh_native_update_timer_on && timer=true
   wine_bytes=$(oh_native_du "$OH_WINE_DIR")
   native_bytes=$(oh_native_du "$OH_NATIVE_DIR")
   if ((json)); then
@@ -1195,7 +1437,9 @@ oh_native_status() {
     printf '"prefix":{"present":%s,"path":%s},' "$(oh_json_bool test -f "$OH_NATIVE_PREFIX/system.reg")" "$(oh_json_str "$OH_NATIVE_PREFIX")"
     printf '"office":{"product":%s,"plans":%s,"version":%s,"apps":[%s]},' "$(oh_json_str "$product")" \
       "$(oh_json_str "$([[ -z $product ]] || oh_native_plan_words "$product")")" "$(oh_json_str "$office_ver")" "$apps_json"
-    printf '"seed":{"path":%s,"bytes":%s,"sha256":%s,"serving":%s},' "$(oh_json_str "$seed")" "$seed_bytes" "$(oh_json_str "$sha")" "$serving"
+    printf '"seed":{"path":%s,"bytes":%s,"sha256":%s,"version":%s,"older_than_office":%s,"serving":%s},' "$(oh_json_str "$seed")" "$seed_bytes" "$(oh_json_str "$sha")" "$(oh_json_str "$seed_ver")" "$seed_old" "$serving"
+    printf '"update":{"installed":%s,"latest":%s,"checked":%s,"available":%s,"result":%s,"result_at":%s,"timer":%s},' "$(oh_json_str "$office_ver")" "$(oh_json_str "$latest")" "$(oh_json_str "$checked")" \
+      "$(oh_native_newer "$latest" "$office_ver" && echo true || echo false)" "$(oh_json_str "$result")" "$(oh_json_str "$result_at")" "$timer"
     printf '"disk":{"wine_bytes":%s,"native_bytes":%s},' "${wine_bytes:-0}" "${native_bytes:-0}"
     printf '"remote_signin":%s,"open_with":%s}\n' "$remote" "$(oh_json_str "$(oh_config_get open_with)")"
     return 0
@@ -1203,13 +1447,280 @@ oh_native_status() {
   printf 'wine: %s\n' "${wine_ver:-not installed (omarchohard native install)}"
   if [[ -f $OH_NATIVE_PREFIX/system.reg ]]; then printf 'prefix: %s\n' "$OH_NATIVE_PREFIX"; else printf 'prefix: none\n'; fi
   printf 'office: %s\n' "${office_ver:-not installed}${product:+ $product, for $(oh_native_plan_words "$product") plans}${found[*]:+ (${found[*]})}"
-  if [[ -n $seed ]]; then printf 'seed: %s (%s)%s\n' "$seed" "$(oh_native_size "$seed_bytes")" "$([[ $serving == true ]] && echo ', being served')"; else printf 'seed: none\n'; fi
+  if [[ -n $seed ]]; then printf 'seed: %s (%s)%s%s\n' "$seed" "$(oh_native_size "$seed_bytes")" "$([[ $seed_old == true ]] && echo ", Office $seed_ver, older than the installed Office (devices installed from it update themselves)")" "$([[ $serving == true ]] && echo ', being served')"; else printf 'seed: none\n'; fi
+  if [[ -n $office_ver ]]; then
+    printf 'updates: latest known %s%s; last result: %s; weekly check %s\n' "${latest:-not checked yet}" "${checked:+ (checked $checked)}" "${result:+$result ($result_at)}${result:-none yet}" "$([[ $timer == true ]] && echo on || echo 'off (omarchohard native install turns it on)')"
+    ! oh_native_newer "$latest" "$office_ver" || printf 'update available: Office %s (omarchohard native update)\n' "$latest"
+  fi
   printf 'disk: wine %s, prefix and seed %s\n' "$(oh_native_size "${wine_bytes:-0}")" "$(oh_native_size "${native_bytes:-0}")"
   printf 'remote sign-in: %s\n' "$([[ $remote == true ]] && echo running || echo 'not running')"
   printf 'open_with: %s\n' "$(oh_config_get open_with)"
   # omarchohard never reads the sign-in state; this is what a refusal means.
   printf 'sign-in: shown in Word (File, Account). Errors AADSTS53000, 53001 or 53003 mean your organization requires a managed Windows device: use the web apps or ask IT.\n'
 }
+
+# Prewarm: a user unit that keeps the Wine server and Windows' own services
+# running from login, so Office's first start of the day is a warm one.
+OH_NATIVE_PREWARM=omarchohard-native-prewarm.service
+oh_native_prewarm_on() { systemctl --user is-active --quiet "$OH_NATIVE_PREWARM" 2>/dev/null; }
+
+oh_native_prewarm() {
+  local bin
+  case ${1:-status} in
+  on)
+    oh_native_ready || oh_die "native Office is not set up yet (omarchohard native install)"
+    bin=$(oh_bin_path)
+    oh_require_line "$bin" "the omarchohard path"
+    mkdir -p "$OH_UNIT_DIR"
+    cat >"$OH_UNIT_DIR/$OH_NATIVE_PREWARM" <<EOF
+[Unit]
+Description=omarchohard: keep native Office's Wine server warm
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Environment=$(oh_unit_arg "XDG_DATA_HOME=${OH_DATA_DIR%/*}") $(oh_unit_arg "XDG_STATE_HOME=${OH_STATE_DIR%/*}") $(oh_unit_arg "XDG_CONFIG_HOME=${OH_CONFIG_DIR%/*}")
+ExecStart=$(oh_unit_arg "$bin") native prewarm-run
+# Stopping it ends only the waiter: the Wine server and the apps using it
+# keep running, and the idle watcher stops them once Office is closed.
+KillMode=process
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+    oh_run systemctl --user daemon-reload
+    oh_run systemctl --user enable --now "$OH_NATIVE_PREWARM"
+    oh_ok "native prewarm on (the Wine server and its services stay resident)"
+    ;;
+  off)
+    if [[ -f $OH_UNIT_DIR/$OH_NATIVE_PREWARM ]]; then
+      oh_run systemctl --user disable --now "$OH_NATIVE_PREWARM" 2>/dev/null || true
+      rm -f "$OH_UNIT_DIR/$OH_NATIVE_PREWARM"
+      oh_run systemctl --user daemon-reload 2>/dev/null || true
+    fi
+    # What it kept running now stops once Office has been idle 10 minutes.
+    ! oh_native_ready || oh_native_idle_start
+    oh_ok "native prewarm off"
+    ;;
+  status) if oh_native_prewarm_on; then echo "native prewarm: on"; else echo "native prewarm: off"; fi ;;
+  *) oh_die "usage: omarchohard native prewarm on|off|status" ;;
+  esac
+}
+
+# The unit's process: a persistent Wine server, Windows' services started
+# in the sandbox, then a wait on the server.
+oh_native_prewarm_run() {
+  local -a env
+  oh_native_ready || oh_die "native Office is not set up"
+  mapfile -t env < <(oh_native_env)
+  oh_native_ws_start -p
+  oh_native_box app
+  "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" cmd.exe /c exit >/dev/null 2>&1 || true
+  oh_native_box tmp
+  exec "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w
+}
+
+# Updates. The ODT configuration turns Office's own updater off (it does
+# not run under Wine), so omarchohard updates Office: `native update`
+# compares the installed version with the Current channel's, downloads the
+# newer one with the install's prefetch, and runs the Office Deployment Tool
+# again with the new Version against the same prefix, which updates Office
+# in place. The seed stays as it was: the live prefix is signed in after its
+# first use and is never packed, so status says the seed is older than
+# Office, and a device installed from that seed updates itself afterward.
+OH_NATIVE_UPDATE=omarchohard-native-update
+OH_NATIVE_UPDATE_STATE=$OH_STATE_DIR/native/update
+
+# Whether version A is newer than version B.
+oh_native_newer() {
+  [[ -n $1 && $1 != "$2" && $(printf '%s\n%s\n' "$1" "${2:-0}" | sort -V | tail -n1) == "$1" ]]
+}
+
+# KEY from the update record: checked, latest, result, result_at.
+oh_native_update_get() {
+  [[ -f $OH_NATIVE_UPDATE_STATE ]] || return 1
+  awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); found = 1; exit } END { exit !found }' "$OH_NATIVE_UPDATE_STATE"
+}
+
+# Set KEY VALUE pairs in the update record, written whole.
+oh_native_update_set() {
+  local f=$OH_NATIVE_UPDATE_STATE k v
+  local -A kv=()
+  oh_dry && return 0
+  mkdir -p -- "${f%/*}"
+  if [[ -f $f ]]; then
+    while IFS='=' read -r k v; do [[ -z $k ]] || kv[$k]=$v; done <"$f"
+  fi
+  while (($# >= 2)); do
+    kv[$1]=${2//$'\n'/ }
+    shift 2
+  done
+  for k in checked latest result result_at; do
+    [[ -z ${kv[$k]:-} ]] || printf '%s=%s\n' "$k" "${kv[$k]}"
+  done >"$f.tmp"
+  mv -f -- "$f.tmp" "$f"
+}
+
+oh_native_update_result() { oh_native_update_set result "$1" result_at "$(date -u +%FT%TZ)"; }
+
+# The record of an update that stopped partway (oh_die inside the install
+# steps), from the EXIT trap.
+oh_native_update_failed() {
+  [[ -n ${OH_NATIVE_UPDATING:-} ]] || return 0
+  oh_native_update_result "failed: $OH_NATIVE_UPDATING did not finish (log: $OH_NATIVE_PREFIX/drive_c/c2rlog/)"
+}
+
+# The update's EXIT trap: the failure, if any, and prewarm back on.
+oh_native_update_end() {
+  oh_native_update_failed
+  [[ -z ${OH_NATIVE_PREWARM_AGAIN:-} ]] || systemctl --user start "$OH_NATIVE_PREWARM" 2>/dev/null || true
+}
+
+# `native update [--check]`; the timer runs `native update --auto`, which
+# asks Microsoft at most once in 6 days unless an update is waiting, and
+# leaves Office alone while an app or the remote sign-in is open.
+oh_native_update() {
+  local mode=update installed latest product shared=0 cab checked last tool
+  case ${1:-} in
+  '') ;;
+  --check) mode=check ;;
+  --auto) mode=auto ;;
+  *) oh_die "usage: omarchohard native update [--check]" ;;
+  esac
+  oh_native_ready || oh_die "native Office is not set up yet (omarchohard native install)"
+  installed=$(oh_native_office_version) || oh_die "cannot read the installed Office version from $OH_NATIVE_PREFIX/system.reg"
+  if [[ $mode == auto ]] && checked=$(oh_native_update_get checked) && ! oh_native_newer "$(oh_native_update_get latest || true)" "$installed"; then
+    last=$(date -d "$checked" +%s 2>/dev/null || echo 0)
+    if (($(date +%s) - last < 6 * 86400)); then
+      oh_say "native update: Office $installed was current at $checked; next check 6 days after that"
+      return 0
+    fi
+  fi
+  for tool in curl bsdtar; do
+    oh_have "$tool" || oh_die "native update needs $tool"
+  done
+  if oh_dry; then
+    oh_say "would read the Current channel's version from $OH_OFFICE_CDN/Office/Data/v64.cab, and if it is newer than $installed, download it and run setup.exe /configure in $OH_NATIVE_PREFIX"
+    return 0
+  fi
+  mkdir -p -- "$OH_NATIVE_DIR"
+  cab=$OH_NATIVE_DIR/.v64.cab
+  if ! latest=$(oh_office_cdn_version "$cab"); then
+    rm -f -- "$cab"
+    oh_native_update_result "failed: could not read the current version from Microsoft"
+    oh_die "could not read the current Office version from $OH_OFFICE_CDN/Office/Data/v64.cab"
+  fi
+  rm -f -- "$cab"
+  oh_native_update_set checked "$(date -u +%FT%TZ)" latest "$latest"
+  if ! oh_native_newer "$latest" "$installed"; then
+    [[ $mode == check ]] || oh_native_update_result "up to date ($installed)"
+    oh_ok "Office $installed is current (Current channel: $latest)"
+    return 0
+  fi
+  if [[ $mode == check ]]; then
+    oh_say "Office $latest is out; this device has $installed. Update it: omarchohard native update"
+    return 0
+  fi
+  if [[ -n $(oh_native_app_pids) ]] || oh_native_signin_running; then
+    [[ $mode == auto ]] || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first (and any remote sign-in); Office updates while none is open"
+    oh_native_update_result "skipped: Office was open ($latest is waiting)"
+    oh_say "native update: Office is open; $latest waits for the next try"
+    return 0
+  fi
+  oh_office_prefetch_usable || oh_die "an update needs curl, bsdtar and flock, and $OH_NATIVE_DIR under your home folder"
+  umask 077
+  oh_native_lock native-install
+  product=$(oh_native_office_product) || oh_die "cannot read the installed Office product from $OH_NATIVE_PREFIX/system.reg"
+  [[ $(oh_native_c2r SharedComputerLicensing 2>/dev/null) != 1 ]] || shared=1
+  trap oh_native_update_end EXIT
+  # A Wine server left from Office's last use (it stays 10 minutes, or for
+  # good with prewarm) would run setup.exe in its sandbox and /tmp, so it
+  # stops first. Prewarm stops too, or it would start one again.
+  if [[ -n $(oh_native_server_pids) ]]; then
+    if oh_native_prewarm_on; then
+      OH_NATIVE_PREWARM_AGAIN=1
+      oh_run systemctl --user stop "$OH_NATIVE_PREWARM" 2>/dev/null || true
+    fi
+    if ! oh_native_server_stop; then
+      [[ $mode == auto ]] || oh_die "Office's Wine server (pid $(oh_native_server_pids | paste -sd ' ')) did not stop; close Office and try again"
+      oh_native_update_result "skipped: Office's Wine server was running ($latest is waiting)"
+      oh_say "native update: Office's Wine server did not stop; $latest waits for the next try"
+      return 0
+    fi
+  fi
+  OH_NATIVE_UPDATING="Office $installed to $latest"
+  oh_native_update_result "updating Office $installed to $latest"
+  oh_native_src_start
+  oh_native_step_office "$product" "$shared"
+  installed=$(oh_native_office_version || true)
+  OH_NATIVE_UPDATING=''
+  if [[ $installed != "$latest" ]]; then
+    oh_native_update_result "failed: Office still reports ${installed:-no version} after setup.exe (log: $OH_NATIVE_PREFIX/drive_c/c2rlog/)"
+    oh_die "Office did not update to $latest; it reports ${installed:-no version} (log: $OH_NATIVE_PREFIX/drive_c/c2rlog/)"
+  fi
+  oh_native_update_result "updated to $latest"
+  oh_ok "Office updated to $latest; the seed stays at its version (a device installed from it updates itself)"
+}
+
+# The weekly check, as a user timer: a randomized delay so many devices do
+# not ask at once, Persistent so a week missed while off runs at the next
+# start, a try an hour after each start (a device installed from an older
+# seed updates the same day), and every 6 hours a quiet local retry that
+# goes to Microsoft only while an update is waiting. Only on AC power.
+oh_native_update_timer() {
+  local bin
+  case ${1:-} in
+  on)
+    oh_dry && {
+      oh_say "would turn on $OH_NATIVE_UPDATE.timer (weekly Office update check)"
+      return 0
+    }
+    oh_have systemctl || return 0
+    bin=$(oh_bin_path)
+    oh_require_line "$bin" "the omarchohard path"
+    mkdir -p "$OH_UNIT_DIR"
+    cat >"$OH_UNIT_DIR/$OH_NATIVE_UPDATE.service" <<EOF
+[Unit]
+Description=omarchohard: update native Office
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+Environment=$(oh_unit_arg "XDG_DATA_HOME=${OH_DATA_DIR%/*}") $(oh_unit_arg "XDG_STATE_HOME=${OH_STATE_DIR%/*}") $(oh_unit_arg "XDG_CONFIG_HOME=${OH_CONFIG_DIR%/*}")
+ExecStart=$(oh_unit_arg "$bin") native update --auto
+Nice=10
+IOSchedulingClass=idle
+EOF
+    cat >"$OH_UNIT_DIR/$OH_NATIVE_UPDATE.timer" <<EOF
+[Unit]
+Description=omarchohard: check for Office updates every week
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=6h
+Persistent=true
+OnActiveSec=1h
+OnUnitInactiveSec=6h
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    systemctl --user enable --now "$OH_NATIVE_UPDATE.timer" >/dev/null 2>&1 ||
+      oh_warn "could not turn on $OH_NATIVE_UPDATE.timer; update Office with: omarchohard native update"
+    ;;
+  off)
+    [[ -f $OH_UNIT_DIR/$OH_NATIVE_UPDATE.timer || -f $OH_UNIT_DIR/$OH_NATIVE_UPDATE.service ]] || return 0
+    oh_run systemctl --user disable --now "$OH_NATIVE_UPDATE.timer" >/dev/null 2>&1 || true
+    oh_run rm -f -- "$OH_UNIT_DIR/$OH_NATIVE_UPDATE.timer" "$OH_UNIT_DIR/$OH_NATIVE_UPDATE.service"
+    oh_run systemctl --user daemon-reload >/dev/null 2>&1 || true
+    ;;
+  esac
+}
+
+oh_native_update_timer_on() { [[ -f $OH_UNIT_DIR/$OH_NATIVE_UPDATE.timer ]] && systemctl --user is-enabled --quiet "$OH_NATIVE_UPDATE.timer" 2>/dev/null; }
 
 oh_native_prefer() {
   case ${1:-} in
@@ -1241,8 +1752,10 @@ oh_native_uninstall() {
   oh_run systemctl --user stop "$OH_NATIVE_SIGNIN.service" >/dev/null 2>&1 || true
   oh_native_signin_stop
   oh_native_serve_stop
+  oh_native_prewarm off >/dev/null 2>&1 || true
+  oh_native_update_timer off
   oh_native_stop_wine
-  oh_run rm -rf -- "$OH_NATIVE_DIR" "$OH_WINE_DIR"
+  oh_run rm -rf -- "$OH_NATIVE_DIR" "$OH_WINE_DIR" "${OH_NATIVE_TMP%/*}"
   if engine=$(oh_native_engine 2>/dev/null); then
     for img in $("$engine" images --format '{{.Repository}}:{{.Tag}}' "$OH_NATIVE_IMAGE" 2>/dev/null); do
       oh_run "$engine" rmi "$img" >/dev/null 2>&1 || true
@@ -1267,7 +1780,10 @@ oh_native() {
   seed) oh_native_seed "$@" ;;
   status) oh_native_status "$@" ;;
   prefer) oh_native_prefer "$@" ;;
+  prewarm) oh_native_prewarm "$@" ;;
+  prewarm-run) oh_native_prewarm_run ;;
+  update) oh_native_update "$@" ;;
   uninstall) oh_native_uninstall "$@" ;;
-  *) oh_die "usage: omarchohard native check|install|run|signin|seed|status|prefer|uninstall" ;;
+  *) oh_die "usage: omarchohard native check|install|run|signin|seed|status|update|prefer|prewarm|uninstall" ;;
   esac
 }
