@@ -11,6 +11,9 @@ services:
       RAM_SIZE: "@RAM@"
       CPU_CORES: "4"
       DISK_SIZE: "80G"
+      # Parallel connections for dockur's download of the Windows image
+      # (aria2; 1 to 16, dockur's default is 4).
+      CONNECTIONS: "16"
       USERNAME: "@USER@"
       PASSWORD: "@PASS@"
       HOME: "${HOME}"

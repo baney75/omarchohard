@@ -138,4 +138,10 @@ Optimize-Volume -DriveLetter C -ReTrim -ErrorAction SilentlyContinue
 Write-Step ("done: {0:N2} GB used, {1:N2} GB freed" -f (Get-UsedGB), ($start - (Get-UsedGB)))
 # The first-boot task removes itself once it has run to the end.
 schtasks /Delete /TN omarchohard-slim /F 2>$null | Out-Null
+# The host compresses the VM's disk at its next idle pause, which stops
+# Windows; slim-done says DISM is no longer running.
+try {
+  $rel = (Get-Content C:\OEM\inbox-path.txt -Raw -ErrorAction Stop).Trim()
+  [IO.File]::WriteAllText("\\host.lan\Data\$rel\slim-done", (Get-Date).ToUniversalTime().ToString('o'))
+} catch { }
 $mutex.ReleaseMutex()

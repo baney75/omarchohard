@@ -88,6 +88,43 @@ The whole install takes about 45 minutes: Windows installs itself in 20 to
 40, then Office installs. Watch the Windows screen at <http://127.0.0.1:8006>
 if you like.
 
+### Office download during Windows Setup
+
+On the test VM (2026-11-12, Windows image already downloaded), Windows Setup
+took about 3.5 minutes and Office about 12 of the 15.5-minute install, nearly
+all of it downloading from Microsoft's CDN, while the network sat idle during
+Setup. So when `desktop install` starts a new VM, it also starts a download of
+Office's install files on this machine, in a user service
+(`omarchohard-office-prefetch`) that keeps going after the command ends:
+
+- The files go to `~/.local/share/omarchohard/vm/office-src`, which Windows
+  reads as `\\host.lan\Data\.local\share\omarchohard\vm\office-src`
+  (`C:\OEM\office-source.txt` names it). They are the Office Deployment
+  Tool's local source for the current version of the Current channel, in
+  English: about 3.2 GB, the biggest file in 8 byte ranges at once, since the
+  CDN gives one connection a few MB/s. Each file must come to the size the
+  CDN gives for it.
+- The folder holds `progress` (rewritten as bytes arrive), then `ready` with
+  the version, or `failed` with the reason. `prefetch.log` has each step.
+- A complete copy of the current version is used again by a later run; an
+  older version is deleted. Once Windows reports Office installed, the next
+  `desktop status`, `wait` or `doctor` deletes the folder, so the 3.2 GB do
+  not stay on disk.
+- In Windows, `office.ps1` waits for `ready` while the copy's files keep
+  growing (it reads their sizes from a folder listing, since Windows caches a
+  file it read over the share and never sees the host rewrite it),
+  then installs from the copy (`SourcePath`, with `AllowCdnFallback` for any
+  file the copy lacks). It goes to the CDN instead when the host writes
+  `failed` or the files have not grown for 2 minutes, and when setup.exe
+  fails with the copy it runs once more from the CDN, so a bad copy never
+  fails the install. `C:\OEM\office.log` says which source it used.
+- Without `curl`, `bsdtar` (libarchive) or `flock`, there is no download and
+  Office comes from the CDN as before. A VM whose disk already exists gets
+  none either, as Windows runs the first-boot scripts only once.
+
+dockur also downloads the Windows image over 16 connections
+(`CONNECTIONS: "16"` in `compose.yaml`; its default is 4).
+
 ### Progress
 
 `omarchohard desktop status` (or `--json`) names the phase:
@@ -136,8 +173,14 @@ Without copy-on-write, btrfs does not compress the image either. Once
 Windows is set up, `omarchohard desktop compress` stops the VM, rewrites the
 image as a copy-on-write file btrfs keeps zstd-compressed, and starts the VM
 again. On the test VM (2026-11-12) the image's 13 GB of data took 7.5 GB on
-disk afterward. The copy needs free space for one more copy of the image,
-and running it again does nothing.
+disk afterward, and the copy took 45 seconds. A new VM does it by itself,
+once: Windows writes `slim-done` to the inbox when the first boot's cleanup
+(DISM, about 8 minutes) has ended, and the next idle pause compresses the
+disk instead of pausing the VM. An app opened during the copy starts the VM
+again, and the disk stays as it was: run `omarchohard desktop compress`
+later. The copy
+needs free space for one more copy of the image, and running it again does
+nothing.
 
 The image is pinned to `ghcr.io/dockur/windows:6.06`.
 

@@ -20,7 +20,8 @@ rem not trust a cached listing of it: without this the inbox task never sees
 rem a request from omarchohard desktop update or activate.
 powershell.exe -NoProfile -Command "Set-SmbClientConfiguration -DirectoryCacheLifetime 0 -FileNotFoundCacheLifetime 0 -FileInfoCacheLifetime 0 -Force"
 
-rem 3. Microsoft Office from Microsoft's CDN. office.ps1 writes "installed" (or
+rem 3. Microsoft Office, from the copy the host downloads during Windows Setup
+rem when there is one, else from Microsoft's CDN. office.ps1 writes "installed" (or
 rem "failed") to office-status.json before it returns.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\OEM\office.ps1 > C:\OEM\office.log 2>&1
 
