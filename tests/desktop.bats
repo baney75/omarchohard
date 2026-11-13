@@ -73,6 +73,8 @@ fake_vm() {
   grep -qF '"p&ss|w0rd\"q$$x"' "$compose"
   grep -qxF '      USERNAME: "ada"' "$compose"
   grep -qxF '      VERSION: "11e"' "$compose"
+  # dockur downloads the Windows image over 16 connections, not 4.
+  grep -qxF '      CONNECTIONS: "16"' "$compose"
   [ "$(stat -c %a "$compose")" = 600 ]
   run grep -qF 'w0rd' "$HOME/sed.log"
   [ "$status" -ne 0 ]
@@ -149,6 +151,114 @@ fake_vm() {
   run "$OH" desktop wait
   [ "$status" -eq 1 ]
   [[ $output != *"Sign out"* ]]
+}
+
+OFFICE_V=16.0.20527.20196
+
+@test "the Office prefetch downloads the ODT source layout, the big file in 8 byte ranges, and writes ready" {
+  office_cdn "$OFFICE_V"
+  run "$OH" desktop office-prefetch
+  [ "$status" -eq 0 ]
+  src=$XDG_DATA_HOME/omarchohard/vm/office-src
+  [ "$(cat "$src/ready")" = "$OFFICE_V" ]
+  [ ! -e "$src/failed" ]
+  # Exactly the files ODT reads for this version, each byte for byte.
+  [ "$(cd "$src" && find Office -type f | sort)" = "$(office_src_files "$OFFICE_V" | sort)" ]
+  while IFS= read -r f; do cmp "$HOME/cdn/$f" "$src/$f"; done < <(office_src_files "$OFFICE_V")
+  [ "$(grep -cE "^GET [0-9]+-[0-9]+ $OFFICE_CDN/Office/Data/$OFFICE_V/stream.x64.x-none.dat$" "$HOME/curl.log")" -eq 8 ]
+  [ "$(grep -cE "^GET [0-9]+-[0-9]+ " "$HOME/curl.log")" -eq 8 ]
+  # The CDN host only, over HTTPS only, and no redirect followed.
+  run grep -v " $OFFICE_CDN/" "$HOME/curl.log"
+  [ "$status" -ne 0 ]
+  [ "$(grep -c -- '--proto =https' "$HOME/curl.args")" -eq "$(wc -l <"$HOME/curl.args")" ]
+  run grep -E -- '(^| )(-L|--location)( |$)' "$HOME/curl.args"
+  [ "$status" -ne 0 ]
+  [[ $(cat "$src/progress") == "complete: Office $OFFICE_V, "* ]]
+  [ -z "$(find "$src" -name '*.tmp' -o -name '*.part*')" ]
+}
+
+@test "a file that does not come to its Content-Length makes the prefetch write failed, never ready" {
+  office_cdn "$OFFICE_V"
+  printf '999\n' >"$HOME/cdn/Office/Data/$OFFICE_V/s640.cab.len"
+  run "$OH" desktop office-prefetch
+  [ "$status" -eq 1 ]
+  src=$XDG_DATA_HOME/omarchohard/vm/office-src
+  [ ! -e "$src/ready" ]
+  grep -qF "Office/Data/$OFFICE_V/s640.cab came to" "$src/failed"
+  grep -qF 'not the 999 the CDN gave as its Content-Length' "$src/failed"
+  [ ! -e "$src/Office/Data/$OFFICE_V/s640.cab" ]
+}
+
+@test "a complete copy of the current Office is reused with no new download, and an older one is removed" {
+  office_cdn "$OFFICE_V"
+  run "$OH" desktop office-prefetch
+  [ "$status" -eq 0 ]
+  src=$XDG_DATA_HOME/omarchohard/vm/office-src
+  mkdir -p "$src/Office/Data/16.0.1.1"
+  : >"$src/Office/Data/16.0.1.1/stream.x64.x-none.dat"
+  : >"$src/Office/Data/v64_16.0.1.1.cab"
+  rm -f "$HOME/curl.log"
+  run "$OH" desktop office-prefetch
+  [ "$status" -eq 0 ]
+  [ "$(cat "$src/ready")" = "$OFFICE_V" ]
+  # Only the version check is fetched; the rest is HEAD requests.
+  [ "$(grep '^GET' "$HOME/curl.log")" = "GET $OFFICE_CDN/Office/Data/v64.cab" ]
+  [ "$(grep -c '^HEAD' "$HOME/curl.log")" -eq 6 ]
+  [ ! -e "$src/Office/Data/16.0.1.1" ]
+  [ ! -e "$src/Office/Data/v64_16.0.1.1.cab" ]
+  [ "$(cd "$src" && find Office -type f | sort)" = "$(office_src_files "$OFFICE_V" | sort)" ]
+}
+
+@test "desktop install points Windows at the host's Office copy and downloads it in a user service" {
+  stub docker 'exit 0'
+  stub git 'exit 0'
+  office_cdn "$OFFICE_V"
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  vm=$XDG_DATA_HOME/omarchohard/vm
+  # shellcheck disable=SC1003 # one backslash ends the line's last folder
+  [ "$(cat "$vm/oem/office-source.txt")" = '\\host.lan\Data\.local\share\omarchohard\vm\office-src' ]
+  grep -qx -- --user "$HOME/systemd-run.log"
+  grep -qx -- --unit=omarchohard-office-prefetch "$HOME/systemd-run.log"
+  grep -qx -- "--setenv=HOME=$HOME" "$HOME/systemd-run.log"
+  [ "$(tail -n2 "$HOME/systemd-run.log")" = "$(printf 'desktop\noffice-prefetch')" ]
+  # The install itself downloads nothing.
+  [ ! -e "$HOME/curl.log" ]
+  # A VM disk already there does not run the first-boot scripts again, so
+  # there is nothing to download for.
+  : >"$vm/storage/data.img"
+  rm -f "$HOME/systemd-run.log"
+  run "$OH" desktop install --force
+  [ "$status" -eq 0 ]
+  [ ! -e "$vm/oem/office-source.txt" ]
+  [ ! -e "$HOME/systemd-run.log" ]
+}
+
+# shellcheck disable=SC2016 # PowerShell's own $ in the expected text
+@test "office.ps1 installs from the host's copy when it is ready, and from the CDN when that fails" {
+  ps=$BATS_TEST_DIRNAME/../share/omarchohard/vm/office.ps1
+  grep -qxF 'if (Test-Path C:\OEM\office-source.txt) {' "$ps"
+  grep -qxF '      if (Test-Path "$dir\ready") {' "$ps"
+  grep -qxF '      if (Test-Path "$dir\failed") {' "$ps"
+  grep -qxF '      } elseif (((Get-Date) - $changed).TotalSeconds -ge 120) {' "$ps"
+  grep -qF 'SourcePath=`"$([Security.SecurityElement]::Escape($sourcePath))`" Version=`"$sourceVersion`" AllowCdnFallback=`"True`"' "$ps"
+  # The local run first; when it fails, one more run with no SourcePath.
+  local_run=$(grep -nxF '  $code = Invoke-OfficeSetup $source $version' "$ps" | cut -d: -f1)
+  guard=$(grep -nxF 'if (-not $installed) {' "$ps" | cut -d: -f1)
+  cdn_run=$(grep -nxF '  $code = Invoke-OfficeSetup' "$ps" | cut -d: -f1)
+  # Separate checks: a failure before the last of an && list fails no test.
+  [ -n "$local_run" ]
+  [ -n "$guard" ]
+  [ "$local_run" -lt "$guard" ]
+  [ "$cdn_run" -eq $((guard + 1)) ]
+  grep -qxF '  if ($code -eq 0 -and (Get-OfficeInfo).version) {' "$ps"
+  # The signature check and status writes stay, and the log names the source.
+  grep -qF 'Get-AuthenticodeSignature "$work\setup.exe"' "$ps"
+  [ "$(grep -n 'Get-AuthenticodeSignature' "$ps" | cut -d: -f1)" -lt "$local_run" ]
+  grep -qxF "Write-OfficeStatus 'installing-office'" "$ps"
+  grep -qxF "Write-OfficeStatus 'installed'" "$ps"
+  grep -qxF 'Write-Output "office: installed $product on channel $channel from $from"' "$ps"
+  grep -qF 'Write-Output "office: installing $product from Microsoft'"'"'s CDN"' "$ps"
 }
 
 # A filesystem type for stat -f, so the btrfs path runs anywhere.

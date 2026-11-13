@@ -160,13 +160,6 @@ oh_desktop_storage() {
     oh_warn "could not turn off copy-on-write on $dir (chattr +C); Windows Setup can fail on btrfs"
 }
 
-# No copy-on-write also means no btrfs compression. Once Windows is set up,
-# `desktop compress` rewrites the disk image as a copy-on-write file that
-# btrfs keeps zstd-compressed: on the test VM, 13 GB of data took 7.5 GB on
-# disk (2026-11-12). Defragmenting with -czstd compresses every extent; the
-# compression property alone left 8 GB raw, as btrfs gave up on extents it
-# guessed would not shrink. Later writes are compressed when they shrink.
-# The VM stops for the copy, which needs room for a second copy.
 # True while the VM is still stopped: a VM started during the copy (desktop
 # up) has written to the old disk, so the copy must not replace it.
 oh_desktop_compress_stopped() {
@@ -177,6 +170,13 @@ oh_desktop_compress_stopped() {
   return 1
 }
 
+# No copy-on-write also means no btrfs compression. Once Windows is set up,
+# `desktop compress` rewrites the disk image as a copy-on-write file that
+# btrfs keeps zstd-compressed: on the test VM, 13 GB of data took 7.5 GB on
+# disk (2026-11-12). Defragmenting with -czstd compresses every extent; the
+# compression property alone left 8 GB raw, as btrfs gave up on extents it
+# guessed would not shrink. Later writes are compressed when they shrink.
+# The VM stops for the copy, which needs room for a second copy.
 oh_desktop_compress() {
   local dir=$OH_VM_DIR/storage engine state need avail
   local img=$dir/data.img tmp=$dir/data.img.compress
@@ -219,10 +219,237 @@ oh_desktop_compress() {
   esac
   ((ok)) || oh_die "compressing the VM disk failed; the disk is unchanged"
   oh_say "The VM disk is compressed."
+
+# Office prefetch. On the test VM (2026-11-12) Windows Setup took about 3.5
+# minutes and office.ps1 then spent about 12 minutes of a 15.5-minute
+# install downloading Office from Microsoft's CDN, while the network sat
+# idle during Setup. So the host downloads Office's install files while
+# Windows installs, into $OH_OFFICE_SRC, which Windows reaches at
+# \\host.lan\Data, and office.ps1 installs from that copy.
+#
+# The layout, for Office version V in English, is the Office Deployment
+# Tool's local source: Office/Data/v64_V.cab and Office/Data/V/ with
+# i640.cab, s640.cab, s641033.cab, stream.x64.x-none.dat and
+# stream.x64.en-us.dat. Next to it:
+#   progress  one line, rewritten as bytes arrive; office.ps1 gives up on the
+#             copy when it has not changed for 2 minutes
+#   ready     the version, written last, once every file has its full size
+#   failed    the reason, instead of ready
+# Each is written to a .tmp file and moved into place, so Windows never reads
+# half of one.
+#
+# Office's Current channel; every product omarchohard offers installs from
+# it (office.ps1). Only this host is ever contacted, over HTTPS only.
+OH_OFFICE_CDN=https://officecdn.microsoft.com/pr/492350f6-3a01-4f97-b9c0-c7c6ddf67d60
+OH_OFFICE_SRC=$OH_VM_DIR/office-src
+OH_PREFETCH_UNIT=omarchohard-office-prefetch
+# The CDN gives one connection a few MB/s, so a file bigger than this comes
+# in 8 byte ranges at once and is joined afterward.
+OH_PREFETCH_SPLIT=$((32 * 1024 * 1024))
+# No -L: a redirect is never followed to another host. A stalled transfer
+# (under 4 KB/s for a minute) fails instead of hanging.
+OH_OFFICE_CURL=(curl --proto "=https" -fsS --connect-timeout 20 --retry 3 --retry-delay 2 --speed-limit 4096 --speed-time 60)
+
+# Without curl, bsdtar or flock, or with the VM folder outside the shared
+# home, there is no prefetch and office.ps1 downloads Office itself.
+oh_office_prefetch_usable() {
+  oh_have curl && oh_have bsdtar && oh_have flock && [[ $OH_OFFICE_SRC == "$HOME"/* ]]
+}
+
+# The copy's path as Windows sees it: the home folder is \\host.lan\Data.
+oh_office_src_win() {
+  local rel=${OH_OFFICE_SRC#"$HOME"/}
+  printf '\\\\host.lan\\Data\\%s\n' "${rel//\//\\}"
+}
+
+# Write marker NAME holding TEXT, whole.
+oh_office_mark() {
+  printf '%s\n' "$2" >"$OH_OFFICE_SRC/$1.tmp" && mv -f -- "$OH_OFFICE_SRC/$1.tmp" "$OH_OFFICE_SRC/$1"
+}
+
+oh_fsize() { stat -c %s -- "$1" 2>/dev/null || echo -1; }
+
+# The Current channel's version now, from VersionDescriptor.xml in v64.cab.
+oh_office_cdn_version() {
+  local cab=$1 xml re='<Available[[:space:]][^>]*I640Version="([0-9]+(\.[0-9]+){3})"'
+  "${OH_OFFICE_CURL[@]}" -o "$cab" "$OH_OFFICE_CDN/Office/Data/v64.cab" || return 1
+  xml=$(bsdtar -xOf "$cab" VersionDescriptor.xml 2>/dev/null) || return 1
+  xml=${xml//$'\n'/ }
+  [[ $xml =~ $re ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+# The Content-Length of a 200 answer to a HEAD request for URL.
+oh_office_length() {
+  local head code len
+  head=$("${OH_OFFICE_CURL[@]}" -I "$1") || return 1
+  head=${head//$'\r'/}
+  code=$(awk 'NR == 1 { print $2 }' <<<"$head")
+  len=$(awk -F': *' 'tolower($1) == "content-length" { n = $2 } END { print n }' <<<"$head")
+  [[ $code == 200 && $len =~ ^[0-9]+$ ]] && ((len > 0)) || return 1
+  printf '%s\n' "$len"
+}
+
+# Fetch URL into FILE, which must come to LEN bytes; sets OH_FETCH_WHY when
+# it fails. A big file comes in 8 ranges at once; a range already whole from
+# an earlier run is kept.
+oh_office_fetch() {
+  local url=$1 file=$2 len=$3 n=8 chunk s e i p rc=0
+  local -a pids=()
+  OH_FETCH_WHY=''
+  mkdir -p "${file%/*}"
+  if ((len <= OH_PREFETCH_SPLIT)); then
+    "${OH_OFFICE_CURL[@]}" -o "$file.tmp" "$url" || rc=1
+  else
+    chunk=$(((len + n - 1) / n))
+    for ((i = 0; i < n; i++)); do
+      s=$((i * chunk)) e=$(((i + 1) * chunk - 1))
+      ((e < len)) || e=$((len - 1))
+      [[ $(oh_fsize "$file.part$i") == $((e - s + 1)) ]] && continue
+      "${OH_OFFICE_CURL[@]}" -r "$s-$e" -o "$file.part$i" "$url" &
+      pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p" || rc=1; done
+    if ((rc == 0)); then
+      for ((i = 0; i < n; i++)); do
+        s=$((i * chunk)) e=$(((i + 1) * chunk - 1))
+        ((e < len)) || e=$((len - 1))
+        if [[ $(oh_fsize "$file.part$i") != $((e - s + 1)) ]]; then
+          OH_FETCH_WHY="byte range $s-$e of ${file#"$OH_OFFICE_SRC"/} came to $(oh_fsize "$file.part$i") bytes, not $((e - s + 1))"
+          return 1
+        fi
+        # Appended one range at a time and deleted, so the join needs
+        # little more room than the file itself.
+        if ((i == 0)); then mv -f -- "$file.part0" "$file.tmp"; else
+          cat -- "$file.part$i" >>"$file.tmp" && rm -f -- "$file.part$i" || rc=1
+        fi
+      done
+    fi
+  fi
+  if ((rc)); then
+    OH_FETCH_WHY="could not download $url"
+    return 1
+  fi
+  if [[ $(oh_fsize "$file.tmp") != "$len" ]]; then
+    OH_FETCH_WHY="${file#"$OH_OFFICE_SRC"/} came to $(oh_fsize "$file.tmp") bytes, not the $len the CDN gave as its Content-Length"
+    rm -f -- "$file.tmp"
+    return 1
+  fi
+  mv -f -- "$file.tmp" "$file"
+}
+
+# Rewrite progress whenever the byte count changes.
+oh_office_progress() {
+  local total=$1 last='' now n
+  while :; do
+    n=$(find "$OH_OFFICE_SRC/Office" -type f -printf '%s\n' 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }') || true
+    now="downloading ${n:-0} of $total bytes"
+    [[ $now == "$last" ]] || oh_office_mark progress "$now" || true
+    last=$now
+    sleep 2
+  done
+}
+
+oh_office_prefetch_fail() {
+  oh_office_mark failed "$1"
+  printf 'failed: %s\n' "$1"
+  exit 1
+}
+
+# A stop before ready or failed (a kill, systemctl stop) still says failed,
+# so Windows does not wait the 2 minutes. Every curl and the progress loop
+# end with it.
+oh_office_prefetch_end() {
+  local p
+  for p in $(jobs -p); do kill "$p" 2>/dev/null || true; done
+  [[ -e $OH_OFFICE_SRC/ready || -e $OH_OFFICE_SRC/failed ]] ||
+    oh_office_mark failed "the download stopped before it finished" || true
+}
+
+# `desktop office-prefetch`, started by oh_office_prefetch_start.
+oh_office_prefetch() {
+  local dir=$OH_OFFICE_SRC lk v f rel len need=0 total=0 avail d i loop
+  local -a rels lens=()
+  oh_office_prefetch_usable || return 0
+  mkdir -p "$dir"
+  # One download at a time; a second one leaves the first to finish.
+  exec {lk}>"$dir/.lock"
+  flock -n "$lk" || return 0
+  exec >"$dir/prefetch.log" 2>&1
+  rm -f -- "$dir/ready" "$dir/failed"
+  trap oh_office_prefetch_end EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  oh_office_mark progress "checking the Office version"
+  v=$(oh_office_cdn_version "$dir/v64.cab.tmp") ||
+    oh_office_prefetch_fail "could not read the current Office version from $OH_OFFICE_CDN/Office/Data/v64.cab"
+  rm -f -- "$dir/v64.cab.tmp"
+  printf 'Office %s\n' "$v"
+  rels=("Office/Data/v64_$v.cab")
+  for f in i640.cab s640.cab s641033.cab stream.x64.x-none.dat stream.x64.en-us.dat; do rels+=("Office/Data/$v/$f"); done
+  # Only one version is kept: an older copy is 3 GB Windows will not use.
+  for d in "$dir"/Office/Data/*; do
+    [[ -e $d && $d != "$dir/Office/Data/$v" && $d != "$dir/Office/Data/v64_$v.cab" ]] || continue
+    rm -rf -- "$d"
+  done
+  for rel in "${rels[@]}"; do
+    len=$(oh_office_length "$OH_OFFICE_CDN/$rel") ||
+      oh_office_prefetch_fail "the CDN gave no size for $OH_OFFICE_CDN/$rel"
+    lens+=("$len")
+    total=$((total + len))
+    [[ $(oh_fsize "$dir/$rel") == "$len" ]] || need=$((need + len))
+  done
+  avail=$(df --output=avail -B1 -- "$dir" 2>/dev/null | tail -n1) || avail=''
+  avail=${avail//[[:space:]]/}
+  [[ ! $avail =~ ^[0-9]+$ ]] || ((avail >= need + 1073741824)) ||
+    oh_office_prefetch_fail "not enough disk space: Office needs $(((need + 1073741824) / 1000000000)) GB free in $dir"
+  # Without the lock: its sleep would hold it a moment after the loop ends.
+  oh_office_progress "$total" {lk}>&- &
+  loop=$!
+  for i in "${!rels[@]}"; do
+    rel=${rels[$i]} len=${lens[$i]}
+    if [[ $(oh_fsize "$dir/$rel") == "$len" ]]; then
+      printf 'kept %s (%s bytes)\n' "$rel" "$len"
+      continue
+    fi
+    printf 'downloading %s (%s bytes)\n' "$rel" "$len"
+    oh_office_fetch "$OH_OFFICE_CDN/$rel" "$dir/$rel" "$len" || oh_office_prefetch_fail "$OH_FETCH_WHY"
+  done
+  kill "$loop" 2>/dev/null || true
+  wait "$loop" 2>/dev/null || true
+  oh_office_mark progress "complete: Office $v, $total bytes"
+  oh_office_mark ready "$v"
+  printf 'ready: Office %s, %s bytes\n' "$v" "$total"
+}
+
+# Start the prefetch in the background, where it outlives this command.
+# Through systemd-run --user, as oh_desktop_autopause_arm does, and not as a
+# detached process: a user service is outside the terminal and its session,
+# so closing the terminal or stopping its scope does not end the download;
+# its unit name lets a second install see that one is already running; and
+# it can be stopped by name (systemctl --user stop omarchohard-office-prefetch).
+# A detached process (setsid) is the fallback where there is no user systemd.
+oh_office_prefetch_start() {
+  local v bin
+  local -a env=("--setenv=HOME=$HOME" "--setenv=PATH=$PATH")
+  systemctl --user is-active --quiet "$OH_PREFETCH_UNIT.service" 2>/dev/null && return 0
+  mkdir -p "$OH_OFFICE_SRC"
+  rm -f -- "$OH_OFFICE_SRC/ready" "$OH_OFFICE_SRC/failed" "$OH_OFFICE_SRC/progress"
+  for v in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
+    [[ -z ${!v:-} ]] || env+=("--setenv=$v=${!v}")
+  done
+  bin=$(oh_bin_path)
+  if oh_have systemd-run && oh_run systemd-run --user --quiet --collect --unit="$OH_PREFETCH_UNIT" "${env[@]}" "$bin" desktop office-prefetch 2>/dev/null; then
+    return 0
+  fi
+  oh_dry && return 0
+  setsid -f "$bin" desktop office-prefetch </dev/null >/dev/null 2>&1 && return 0
+  # Windows then goes straight to the CDN instead of waiting.
+  oh_office_mark failed "could not start the download on the host"
 }
 
 oh_desktop_install() {
-  local windows=11e office=m365 ram=4G force=0 wait=0 legacy=0 user pass engine tpl
+  local windows=11e office=m365 ram=4G force=0 wait=0 legacy=0 prefetch=0 user pass engine tpl
   while (($#)); do
     case $1 in
     --windows)
@@ -319,6 +546,14 @@ EOF
     # or "ready" before this Windows has even started.
     [[ -e $OH_VM_DIR/storage/data.img ]] || rm -f -- "$OH_OFFICE_STATUS"
     oh_desktop_storage
+    # Only a new disk runs C:\OEM\install.bat, and with it office.ps1.
+    [[ -e $OH_VM_DIR/storage/data.img ]] || ! oh_office_prefetch_usable || prefetch=1
+  fi
+  # office-source.txt tells office.ps1 to install from the host's copy.
+  if ((prefetch)); then
+    oh_office_src_win >"$OH_VM_DIR/oem/office-source.txt"
+  else
+    rm -f -- "$OH_VM_DIR/oem/office-source.txt"
   fi
   (
     umask 077
@@ -328,6 +563,10 @@ EOF
 
   oh_config_set desktop_office "$office"
   oh_desktop_compose up -d
+  if ((prefetch)); then
+    oh_office_prefetch_start
+    oh_dim "Downloading Office's install files on this machine while Windows installs (log: $OH_OFFICE_SRC/prefetch.log)"
+  fi
   oh_say ""
   oh_ok "Windows is installing itself in the VM. With Office, this takes about 45 minutes."
   oh_say "Watch it at http://127.0.0.1:8006 . Office installs right after Windows."
@@ -1389,6 +1628,7 @@ oh_desktop() {
   run) oh_desktop_run "$@" ;;
   open) oh_desktop_open "$@" ;;
   holder) oh_desktop_holder ;;
+  office-prefetch) oh_office_prefetch ;;
   autopause) oh_desktop_autopause ;;
   slim) oh_desktop_slim "$@" ;;
   compress) oh_desktop_compress "$@" ;;

@@ -22,9 +22,17 @@ builds are not listed; they carry the version of the next release plus a
   btrfs. On the test VM it cut the image from 13 GB to 7.5 GB on disk.
   `setup --yes` without it keeps the current choice.
 - `.csv` files can open in Excel (`omarchohard files csv`).
+- `desktop install` downloads Office's install files on the host while
+  Windows Setup runs, and Windows installs Office from that copy. On the test
+  VM, Office's download from the CDN after Setup took about 12 of a
+  15.5-minute install. The copy is checked file by file against the CDN's
+  sizes; when it fails or stalls for 2 minutes, Office installs from the CDN
+  as before. See docs/desktop-tier.md.
 
 ### Changed
 
+- The desktop VM downloads the Windows image over 16 connections
+  (dockur's `CONNECTIONS`), up from dockur's default of 4.
 - OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files no
   longer open in Office unless you choose them (`omarchohard files all`).
   The next install hands them back to the app that had them before.
