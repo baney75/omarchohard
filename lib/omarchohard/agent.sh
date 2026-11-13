@@ -101,7 +101,7 @@ oh_probe_recommend() {
   # the web apps are the light choice and the one for Teams either way.
   if [[ $R_DESKTOP == yes ]]; then
     R_TIER=desktop
-    R_WHY_TIER="the real Windows apps: add-ins, macros, offline, Office's own updates (one-time install of about 45 minutes)"
+    R_WHY_TIER="the real Windows apps: add-ins, macros, offline, Office's own updates (one-time install of about 20 minutes)"
   else
     R_TIER=web
     R_WHY_TIER="desktop Office needs what this machine lacks ($R_WHY_DESKTOP)"

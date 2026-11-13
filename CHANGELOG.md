@@ -20,7 +20,9 @@ builds are not listed; they carry the version of the next release plus a
 - `setup --files microsoft|all|LIST` answers the question without asking.
   `setup --yes` without it keeps the current choice.
 - `omarchohard desktop compress` keeps the VM's disk image zstd-compressed on
-  btrfs. On the test VM it cut the image from 13 GB to 7.5 GB on disk.
+  btrfs. It cut the image from 13 GB to 7.5 GB on disk on tiny11, and to
+  12 GB on the stock Windows evaluation, whose files are already compressed
+  inside Windows. The stop also lets dockur delete its 8.2 GB Windows image.
   A new VM runs it once by itself, at the first idle pause after Windows
   finishes its first-boot cleanup: the VM stops for about 45 seconds and
   starts again.
@@ -30,7 +32,9 @@ builds are not listed; they carry the version of the next release plus a
   VM (tiny11, 2026-11-13) the install took 9.5 minutes instead of 15.5:
   Office took 5 minutes after Setup instead of 12. The copy is checked file
   by file against the CDN's sizes; when it fails or stops growing for 2
-  minutes, Office installs from the CDN as before. See docs/desktop-tier.md.
+  minutes, Office installs from the CDN as before. On the stock path
+  (2026-11-13, nothing cached) the whole install took 20 minutes, 8.6 of them
+  downloading Windows; the docs said about 45. See docs/desktop-tier.md.
 
 ### Changed
 

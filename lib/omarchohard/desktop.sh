@@ -172,8 +172,9 @@ oh_desktop_compress_stopped() {
 
 # No copy-on-write also means no btrfs compression. Once Windows is set up,
 # `desktop compress` rewrites the disk image as a copy-on-write file that
-# btrfs keeps zstd-compressed: on the test VM, 13 GB of data took 7.5 GB on
-# disk (2026-11-12). Defragmenting with -czstd compresses every extent; the
+# btrfs keeps zstd-compressed: 13 GB of data took 7.5 GB on disk on tiny11
+# (2026-11-12) and 12 GB on the stock evaluation image, whose files Windows
+# already compresses (2026-11-13). Defragmenting with -czstd compresses every extent; the
 # compression property alone left 8 GB raw, as btrfs gave up on extents it
 # guessed would not shrink. Later writes are compressed when they shrink.
 # The VM stops for the copy, which needs room for a second copy.
@@ -586,7 +587,7 @@ EOF
     oh_dim "Downloading Office's install files on this machine while Windows installs (log: $OH_OFFICE_SRC/prefetch.log)"
   fi
   oh_say ""
-  oh_ok "Windows is installing itself in the VM. With Office, this takes about 45 minutes."
+  oh_ok "Windows is installing itself in the VM. With Office, this takes about 20 minutes, most of it the 8 GB Windows download."
   oh_say "Watch it at http://127.0.0.1:8006 . Office installs right after Windows."
   if ((wait)); then
     oh_desktop_wait

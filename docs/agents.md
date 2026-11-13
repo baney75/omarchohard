@@ -36,7 +36,7 @@ omarchohard setup --yes --optimize \
 | Flag | Effect |
 | --- | --- |
 | `--yes`, `-y` | Take the default for every question; never read the terminal |
-| `--tier desktop\|web` | Desktop Office in a Windows VM, or the web apps. `desktop` installs the VM and waits for Office (about 45 minutes) and still sets up the web apps, for Teams; setup exits 1 if Office does not finish. Without `--tier`, `--yes` means `web` |
+| `--tier desktop\|web` | Desktop Office in a Windows VM, or the web apps. `desktop` installs the VM and waits for Office (about 20 minutes) and still sets up the web apps, for Teams; setup exits 1 if Office does not finish. Without `--tier`, `--yes` means `web` |
 | `--browser B` | The browser command, such as `chromium` or `microsoft-edge-stable` |
 | `--shared` or `--isolated` | Share the everyday browser profile (default) or give Microsoft 365 its own |
 | `--apps LIST` | `all`, or a comma list of `word excel powerpoint outlook onenote teams onedrive` |
