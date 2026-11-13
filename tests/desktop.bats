@@ -198,8 +198,15 @@ compress_stubs() {
   printf 'windows disk\n' >"$vm/storage/data.img"
   fs_is btrfs
   stub df 'printf "Avail\n99999999\n"'
+  # Set up, as compress wants, with the VM running until compose stops it.
+  stub winapps 'exit 0'
+  mkdir -p "$XDG_CONFIG_HOME/winapps"
+  printf 'RDP_USER="ada"\nRDP_PASS="pw"\n' >"$XDG_CONFIG_HOME/winapps/winapps.conf"
+  : >"$vm/compose.yaml"
+  echo running >"$HOME/vm.state"
   # shellcheck disable=SC2016
-  stub docker 'case "$1" in info) ;; inspect) echo running ;; *) printf "docker %s\n" "$*" >>"$HOME/vm.log" ;; esac'
+  stub docker 'case "$1" in info) ;; inspect) cat "$HOME/vm.state" ;; *) printf "docker %s\n" "$*" >>"$HOME/vm.log"
+  [[ $* == *" stop" ]] && echo "${RESTART_STATE:-exited}" >"$HOME/vm.state" || true ;; esac'
   # shellcheck disable=SC2016
   stub chattr 'printf "chattr %s\n" "$*" >>"$HOME/vm.log"'
   # A file whose compression property is set reports it, as btrfs does.
@@ -240,6 +247,25 @@ esac"
   [ "$(cat "$vm/storage/data.img")" = 'windows disk' ]
   [ ! -e "$vm/storage/data.img.compress" ]
   [ "$(tail -n 1 "$HOME/vm.log")" = "docker compose -f $vm/compose.yaml up -d" ]
+}
+
+@test "desktop compress keeps the old disk when the VM started again during the copy" {
+  compress_stubs
+  RESTART_STATE=running run "$OH" desktop compress
+  [ "$status" -ne 0 ]
+  [[ $output == *"started during the copy"* ]]
+  [ ! -e "$vm/storage/data.img.compress" ]
+  run grep -qxF "$vm/storage/data.img" "$HOME/zstd"
+  [ "$status" -ne 0 ]
+}
+
+@test "desktop compress waits until desktop Office is set up" {
+  compress_stubs
+  rm "$XDG_CONFIG_HOME/winapps/winapps.conf"
+  run "$OH" desktop compress
+  [ "$status" -ne 0 ]
+  [[ $output == *"not set up yet"* ]]
+  [ ! -e "$HOME/vm.log" ]
 }
 
 @test "desktop install keeps the named volume of a VM made before 0.2.0" {

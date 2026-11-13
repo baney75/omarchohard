@@ -167,6 +167,16 @@ oh_desktop_storage() {
 # compression property alone left 8 GB raw, as btrfs gave up on extents it
 # guessed would not shrink. Later writes are compressed when they shrink.
 # The VM stops for the copy, which needs room for a second copy.
+# True while the VM is still stopped: a VM started during the copy (desktop
+# up) has written to the old disk, so the copy must not replace it.
+oh_desktop_compress_stopped() {
+  local state
+  state=$("$1" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null) || return 0
+  [[ $state == exited || $state == created ]] && return 0
+  oh_warn "the VM started during the copy"
+  return 1
+}
+
 oh_desktop_compress() {
   local dir=$OH_VM_DIR/storage engine state need avail
   local img=$dir/data.img tmp=$dir/data.img.compress
@@ -174,6 +184,8 @@ oh_desktop_compress() {
   [[ -f $img ]] || oh_die "no VM disk at $img; a VM made before 0.2.0 keeps its disk in a Docker volume"
   [[ $(stat -f -c %T "$dir" 2>/dev/null) == btrfs ]] || oh_die "the VM disk is not on btrfs, which is what compresses it"
   oh_have btrfs || oh_die "btrfs-progs is required (omarchy pkg add btrfs-progs)"
+  # Stopping the VM during Windows Setup or the Office install would break it.
+  oh_desktop_ready || oh_die "desktop Office is not set up yet; compress the disk once it is (omarchohard desktop wait)"
   if [[ $(btrfs property get "$img" compression 2>/dev/null) == compression=zstd ]]; then
     oh_say "The VM disk is already compressed."
     return 0
@@ -199,6 +211,7 @@ oh_desktop_compress() {
     oh_run btrfs property set "$tmp" compression zstd &&
     oh_run cp --sparse=always -- "$img" "$tmp" &&
     oh_run btrfs filesystem defragment -czstd -- "$tmp" &&
+    oh_desktop_compress_stopped "$engine" &&
     oh_run mv -f -- "$tmp" "$img" && ok=1
   rm -f -- "$tmp"
   case $state in
