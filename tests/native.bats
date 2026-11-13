@@ -53,6 +53,7 @@ fake_installed() {
   mkdir -p "$OFFICE"
   : >"$OFFICE/WINWORD.EXE"
   c2r_reg O365ProPlusRetail 16.0.20527.20196 >"$PREFIX/system.reg"
+  : >"$NATIVE/install-done"
 }
 
 sha() { sha256sum "$1" | awk '{ print $1 }'; }
@@ -149,6 +150,32 @@ exit 0'
     and .seed.bytes > 0 and (.seed.sha256 | length) == 64 and .remote_signin == false and .open_with == "native"' <<<"$output"
   run "$OH" native status
   [[ $output == *"AADSTS53000, 53001 or 53003 mean your organization requires a managed Windows device"* ]]
+}
+
+@test "an install that stopped after Word is redone from scratch, never counted as installed" {
+  fake_wine
+  make_seed "$BATS_TEST_TMPDIR/s.tar.zst"
+  # Word is in place, but the install stopped before its last steps.
+  mkdir -p "$OFFICE" "$NATIVE/office-src"
+  : >"$OFFICE/WINWORD.EXE"
+  : >"$PREFIX/stopped-here"
+  : >"$NATIVE/office-src/kept"
+  run "$OH" native install
+  [ "$status" -eq 1 ]
+  [[ $output == *"an earlier install stopped before it finished"* ]]
+  [ -e "$PREFIX/stopped-here" ]
+  run "$OH" native install --from "$BATS_TEST_TMPDIR/s.tar.zst" --yes
+  [ "$status" -eq 0 ]
+  [[ $output != *"already installed"* ]]
+  [[ $output == *"stopped before it finished; removing it and installing again"* ]]
+  [ ! -e "$PREFIX/stopped-here" ]
+  [ -f "$OFFICE/WINWORD.EXE" ]
+  [ -f "$NATIVE/$SEEDNAME" ]
+  [ -e "$NATIVE/office-src/kept" ]
+  [ -f "$NATIVE/install-done" ]
+  run "$OH" native install --yes
+  [ "$status" -eq 0 ]
+  [[ $output == *"already installed"* ]]
 }
 
 @test "a bad SHA256 on the Wine download aborts before anything is extracted" {

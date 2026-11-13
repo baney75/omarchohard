@@ -42,6 +42,9 @@ OH_NATIVE_SRC=$OH_NATIVE_DIR/office-src
 OH_NATIVE_OFFICE="$OH_NATIVE_PREFIX/drive_c/Program Files/Microsoft Office/root/Office16"
 # Written when setup --tier native has finished once, so a rerun is a no-op.
 OH_NATIVE_DONE=$OH_NATIVE_DIR/setup-done
+# Written as the install's last step. Word without it is an install that
+# stopped: its sign-in settings or seed may be missing.
+OH_NATIVE_COMPLETE=$OH_NATIVE_DIR/install-done
 
 # Which Microsoft 365 the person has, and the Office product it installs.
 # One table, so a change of mapping is one line. Only personal and family
@@ -733,6 +736,19 @@ oh_native_install() {
     oh_have "$tool" || oh_die "native Office needs $tool"
   done
   oh_native_lock native-install
+  if [[ -e $OH_NATIVE_PREFIX && ! -f $OH_NATIVE_COMPLETE ]]; then
+    # Never finish it in place: someone may have signed in since, and the
+    # seed must be packed before any sign-in. The download and Wine stay.
+    if ((! yes)); then
+      oh_ui_interactive || oh_die "an earlier install stopped before it finished; run this in a terminal or add --yes to remove it and install again"
+      oh_ui_open
+      oh_ui_confirm "An earlier install stopped before it finished. Remove it and install again? The Office download and Wine are kept." yes || oh_die "nothing was changed"
+    fi
+    oh_say "An earlier install stopped before it finished; removing it and installing again"
+    oh_native_stop_wine
+    oh_run rm -rf -- "$OH_NATIVE_PREFIX"
+    yes=1
+  fi
   if oh_native_has word; then
     local have
     have=$(oh_native_office_product || true)
@@ -751,8 +767,6 @@ oh_native_install() {
     product=${OH_NATIVE_PLANS[$OH_NATIVE_PLAN]}
     oh_say "No --plan given: installing Microsoft 365 Personal and Family ($OH_NATIVE_PLAN). For school or work, add --plan school, business or enterprise."
   fi
-  [[ -z $from || ! -e $OH_NATIVE_PREFIX ]] ||
-    oh_die "$OH_NATIVE_PREFIX is there but has no Word in it (an install that stopped). Remove it first: omarchohard native uninstall"
   if [[ -z $from ]]; then
     oh_office_prefetch_usable || oh_die "a fresh install needs curl, bsdtar and flock, and $OH_NATIVE_DIR under your home folder"
     question="Download Microsoft 365 ($product) from Microsoft (about 3.4 GB) and install Word, Excel, PowerPoint, Outlook and OneNote under Wine? This accepts Microsoft's license terms (https://www.microsoft.com/useterms)."
@@ -785,6 +799,7 @@ oh_native_install() {
   fi
   [[ -z $email ]] || oh_say "Office has no setting that fills in the sign-in address; sign in as $email in Office's window."
   oh_dry && return 0
+  : >"$OH_NATIVE_COMPLETE"
   oh_config_set open_with native
   oh_ok "native Office is ready in $((SECONDS - start)) s; Office files open in it (omarchohard native status)"
 }
