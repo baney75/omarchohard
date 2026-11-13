@@ -1329,9 +1329,12 @@ oh_native_signin_run() {
 }
 
 oh_native_signin_end() {
-  oh_native_ws -k 2>/dev/null || true
+  # Word is closed the way a person closes it, so Office finishes saving the
+  # sign-in it has just taken; whatever is left is stopped after 20 s.
+  oh_native_wine taskkill /IM WINWORD.EXE >/dev/null 2>&1 || true
   oh_native_box tmp
   oh_dry || timeout 20 "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null || true
+  oh_native_ws -k 2>/dev/null || true
   oh_native_devtools off
   oh_native_ws -k 2>/dev/null || true
   oh_native_hidden_stop
@@ -1382,7 +1385,10 @@ oh_native_signin() {
   done
   [[ $minutes =~ ^[0-9]+$ ]] && ((minutes >= 1 && minutes <= 240)) || oh_die "--minutes takes 1 to 240"
   [[ $port =~ ^[0-9]+$ ]] && ((port >= 1024 && port <= 65535)) || oh_die "--port takes 1024 to 65535"
-  ((remote)) && ip=$(oh_native_bind_ip 0)
+  # Checked here, not left to errexit: setup calls this inside $(...).
+  if ((remote)); then
+    ip=$(oh_native_bind_ip 0) || return 1
+  fi
   oh_native_signin_needs "$remote"
   dir=$(oh_native_signin_dir)
   bin=$(oh_bin_path)

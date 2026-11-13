@@ -840,6 +840,8 @@ def main():
     remote = bool(a.remote)
     host, port = a.remote.rsplit(":", 1) if remote else ("127.0.0.1", "0")
     host = host.strip("[]")
+    if remote and host in ("", "0.0.0.0", "::"):
+        ap.error("--remote needs this device's tailnet address, never every interface")
     sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, int(port)))

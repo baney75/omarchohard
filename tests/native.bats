@@ -367,6 +367,36 @@ while True:
   [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin" ]
 }
 
+@test "setup --remote-signin with Tailscale down starts no sign-in, and the bridge never binds every interface" {
+  fake_wine
+  make_seed "$BATS_TEST_TMPDIR/remote.tar.zst"
+  # shellcheck disable=SC2016
+  stub ssh 'exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
+  signin_stubs
+  stub tailscale 'exit 1'
+  run "$OH" setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --remote-signin --json
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | tail -n1 | jq -e '.state == "needs_signin" and .signin_url == null'
+  [[ $output == *"Tailscale is not up"* ]]
+  [ ! -e "$HOME/systemd-run.log" ] || ! grep -qx signin-run "$HOME/systemd-run.log"
+  for addr in :6080 0.0.0.0:6080 '[::]:6080'; do
+    run timeout 10 python3 -I -B "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" \
+      --office-port 1 --display :99 --browser /bin/false --remote "$addr"
+    [ "$status" -eq 2 ]
+    [[ $output == *"tailnet address"* ]]
+  done
+}
+
+@test "after a sign-in, Word is asked to close before Wine is stopped" {
+  fake_installed
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  bash -c 'set -euo pipefail; OH_ROOT=$1 OH_LIB=$1/lib/omarchohard OH_SHARE=$1/share/omarchohard
+    for m in common apps browser integrate open onedrive release doctor desktop native setup agent share; do source "$OH_LIB/$m.sh"; done
+    oh_native_signin_end' _ "$OH_REPO_ROOT"
+  [ "$(head -n1 "$HOME/wine.log")" = "taskkill /IM WINWORD.EXE" ]
+  [ "$(head -n1 "$HOME/wineserver.log")" = -w ]
+}
+
 @test "remote sign-in binds only the tailnet address, and the link carries a one-time session id no command line shows" {
   fake_installed
   signin_stubs
