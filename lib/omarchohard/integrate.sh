@@ -256,6 +256,11 @@ oh_install() {
       oh_desktop install
       return
       ;;
+    --native)
+      shift
+      oh_native_install "$@"
+      return
+      ;;
     *) oh_die "unknown install option: $1" ;;
     esac
     shift
@@ -359,6 +364,10 @@ oh_uninstall() {
     if [[ -f $OH_VM_DIR/compose.yaml ]]; then
       oh_warn "the desktop tier's Windows VM was kept, with its password in $OH_VM_DIR/compose.yaml and $OH_WINAPPS_CONF"
       oh_say "Remove it with: omarchohard desktop remove --delete-vm"
+    fi
+    if [[ -e $OH_NATIVE_DIR ]]; then
+      oh_warn "native Office was kept in $OH_NATIVE_DIR, with its sign-in"
+      oh_say "Remove it with: omarchohard native uninstall"
     fi
   else
     oh_ok "removed launchers and handlers; restored your previous defaults"

@@ -344,7 +344,7 @@ signer_ok() {
   [ -f "$APPS/omarchohard-word.desktop" ]
   run "$OH" setup --yes --tier windows
   [ "$status" -eq 1 ]
-  [[ $output == *"--tier takes desktop or web"* ]]
+  [[ $output == *"--tier takes native, desktop or web"* ]]
 }
 
 @test "interactive setup explains both tiers and recommends the web apps with the reason" {

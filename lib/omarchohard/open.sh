@@ -7,6 +7,7 @@
 # or opened in desktop Office when the desktop tier is set up (open_with=desktop).
 # With open_with=desktop, `open --app word` with no file raises or starts
 # desktop Word too; Teams, OneDrive and Microsoft 365 home stay web apps.
+# open_with=native does the same with native Office (omarchohard native run).
 
 oh_open() {
   oh_config_load
@@ -18,7 +19,7 @@ oh_open() {
   fi
   if (($# == 0)); then
     [[ -n $app ]] || oh_die "usage: omarchohard open FILE|URL"
-    oh_desktop_launch "$app" || oh_launch "$app"
+    oh_native_launch "$app" || oh_desktop_launch "$app" || oh_launch "$app"
     return
   fi
   local target
@@ -107,6 +108,10 @@ oh_open_file() {
   abs=$(readlink -f -- "$file")
   [[ -n $app ]] || app=$(oh_app_for_file "$abs") || oh_die "not an Office file: $file"
 
+  if [[ $(oh_config_get open_with) == native ]] && oh_native_ready && oh_native_has "$app"; then
+    oh_native_run "$app" "$abs"
+    return
+  fi
   if [[ $(oh_config_get open_with) == desktop ]] && oh_desktop_ready; then
     oh_desktop_open_file "$app" "$abs"
     return

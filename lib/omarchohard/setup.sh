@@ -206,27 +206,54 @@ oh_setup_onedrive_failed() {
   fi
 }
 
-# Which Office: the real Windows apps in a VM, or the web apps. Prints
-# desktop, web or installed (the desktop tier is already set up). Desktop is
-# recommended only when this machine passes oh_desktop_check.
+# Which Office: Microsoft's desktop apps on Linux (native), the real Windows
+# apps in a VM, or the web apps. Prints native, desktop, web or installed
+# (the desktop tier is already set up). Native is recommended when this
+# machine meets its needs, then desktop when it passes oh_desktop_check.
 oh_setup_tier() {
   local check why='' line choice
   local desk="Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 20 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"
   local web="Web apps: open instantly and stay light"
+  local native="Native Office: Microsoft's desktop apps on Linux, no VM; about 6 minutes to install, under a minute from another device's copy; Word opens in about 4 seconds"
   if [[ -f $OH_VM_DIR/compose.yaml ]] && oh_desktop_ready; then
     echo installed
     return 0
   fi
-  if check=$(oh_desktop_check 2>&1); then
-    choice=$(oh_ui_choose "Which Microsoft Office?" "$desk (recommended)" "$web") || return 1
+  if [[ -z $(oh_native_missing) ]]; then
+    choice=$(oh_ui_choose "Which Microsoft Office?" "$native (recommended)" "$web" "$desk") || return 1
+  elif check=$(oh_desktop_check 2>&1); then
+    choice=$(oh_ui_choose "Which Microsoft Office?" "$desk (recommended)" "$web" "$native") || return 1
   else
     while IFS= read -r line; do
       [[ $line == *fail* ]] && why+="${why:+; }${line#*fail"$OH_C_OFF"  }"
     done <<<"$check"
     oh_say "Desktop Office is not recommended here: $why"
-    choice=$(oh_ui_choose "Which Microsoft Office?" "$web (recommended)" "$desk") || return 1
+    choice=$(oh_ui_choose "Which Microsoft Office?" "$web (recommended)" "$desk" "$native") || return 1
   fi
-  if [[ $choice == Desktop* ]]; then echo desktop; else echo web; fi
+  case $choice in Native*) echo native ;; Desktop*) echo desktop ;; *) echo web ;; esac
+}
+
+# Which Microsoft 365 the person has, for the native tier: prints a plan.
+oh_setup_plan() {
+  local choice
+  choice=$(oh_ui_choose "Which Microsoft 365 do you have?" "Personal or Family" "School" "Work, business" "Work, large organization") || return 1
+  case $choice in
+  School) echo school ;;
+  "Work, business") echo business ;;
+  "Work, large organization") echo enterprise ;;
+  *) echo personal ;;
+  esac
+}
+
+# The JSON line `setup --json` ends with, on the stdout it was given.
+oh_setup_json() {
+  local state=$1 url=${2:-} detail=${3:-}
+  ((OH_SETUP_JSON_DONE)) && return 0
+  OH_SETUP_JSON_DONE=1
+  printf '{"state":%s,"signin_url":%s,"seconds":%s,"host":%s,"tier":%s,"email":%s,"detail":%s}\n' \
+    "$(oh_json_str "$state")" "$([[ -n $url ]] && oh_json_str "$url" || echo null)" "$((SECONDS - OH_SETUP_START))" \
+    "$(oh_json_str "$(uname -n)")" "$(oh_json_str "${OH_SETUP_TIER:-}")" \
+    "$([[ -n ${OH_SETUP_EMAIL:-} ]] && oh_json_str "$OH_SETUP_EMAIL" || echo null)" "$(oh_json_str "$detail")" >&"$OH_SETUP_OUT"
 }
 
 # Which files open in Office: prints a `files` value. Only formats of enabled
@@ -280,7 +307,17 @@ oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
   local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer tier='' desktop_failed=0
   local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' want_files='' optimize=0
-  local -a browsers labels
+  local from='' sha='' plan='' shared=0 remote_signin=0 lan=0 json=0 native_failed=0 signin_url='' signin_note=''
+  local -a browsers labels native_args=()
+  OH_SETUP_START=$SECONDS OH_SETUP_JSON_DONE=0
+  # --json: everything for people goes to stderr, and stdout gets one JSON
+  # line at the end, also when setup stops early, a bad option included.
+  exec {OH_SETUP_OUT}>&1
+  for line in "$@"; do [[ $line == --json ]] && json=1; done
+  if ((json)); then
+    exec 1>&2
+    trap 'oh_setup_json failed "" "setup stopped early; the lines above say why"' EXIT
+  fi
   while (($#)); do
     case $1 in
     --yes | -y) OH_SETUP_YES=1 ;;
@@ -294,7 +331,14 @@ oh_setup() {
     --onedrive) od=${2:?--onedrive needs rclone, abraunegg or none} && shift ;;
     --prewarm) want_prewarm=${2:?--prewarm needs on or off} && shift ;;
     --optimize) optimize=1 ;;
-    --tier) tier=${2:?--tier needs desktop or web} && shift ;;
+    --tier) tier=${2:?--tier needs native, desktop or web} && shift ;;
+    --from) from=${2:?--from needs a seed file, ssh:HOST or a link} && shift ;;
+    --sha256) sha=${2:?--sha256 needs the seed\'s SHA256} && shift ;;
+    --plan) plan=${2:?--plan needs personal, family, school, business or enterprise} && shift ;;
+    --shared-computer) shared=1 ;;
+    --remote-signin) remote_signin=1 ;;
+    --lan) lan=1 ;;
+    --json) json=1 ;;
     --apps)
       want_apps=$(oh_apps_parse "${2:?--apps needs a list, like word,excel,teams or all}") || exit 1
       shift
@@ -309,7 +353,24 @@ oh_setup() {
   done
   case $od in '' | rclone | abraunegg | none) ;; *) oh_die "--onedrive takes rclone, abraunegg or none" ;; esac
   case $want_prewarm in '' | on | off) ;; *) oh_die "--prewarm takes on or off" ;; esac
-  case $tier in '' | desktop | web) ;; *) oh_die "--tier takes desktop or web" ;; esac
+  case $tier in '' | native | desktop | web) ;; *) oh_die "--tier takes native, desktop or web" ;; esac
+  [[ -z $plan ]] || oh_native_plan_check "$plan"
+  if [[ -n $from$sha$plan ]] || ((shared || remote_signin || lan)); then
+    [[ $tier == native ]] || oh_die "--from, --sha256, --plan, --shared-computer, --remote-signin and --lan go with --tier native"
+  fi
+  OH_SETUP_TIER=$tier OH_SETUP_EMAIL=$want_email
+
+  # Native, set up once already: nothing to do. One setup at a time, so a
+  # second agent on this device waits, then finds it done.
+  if [[ $tier == native ]]; then
+    oh_native_lock setup-native
+    if [[ -f $OH_NATIVE_DONE ]] && oh_native_ready; then
+      oh_ok "native Office is already set up here (omarchohard native status)"
+      ((json)) && oh_setup_json ready "" "already set up; whether the person has signed in shows in Word (File, Account)"
+      trap - EXIT
+      return 0
+    fi
+  fi
 
   oh_ui_interactive && oh_ui_open
   oh_ui_header "omarchohard setup" "" \
@@ -330,9 +391,24 @@ oh_setup() {
   [[ $tier == desktop && -f $OH_VM_DIR/compose.yaml ]] && oh_desktop_ready && tier=installed
   case $tier in
   installed) oh_ok "Office: desktop Office is already set up (omarchohard desktop status)" ;;
+  native) oh_ok "Office: native Office, installed at the end; the web apps are set up too, for Teams" ;;
   desktop) oh_ok "Office: desktop Office, installed at the end; the web apps are set up too, for Teams" ;;
   web) oh_ok "Office: the web apps" ;;
   esac
+
+  if [[ $tier == native && -z $plan ]] && oh_ui_interactive; then
+    plan=$(oh_setup_plan) || oh_die "setup cancelled"
+  fi
+  if [[ $tier == native ]]; then
+    # Microsoft's terms are accepted with --yes; otherwise native install asks.
+    native_args=()
+    [[ -z ${OH_SETUP_YES:-} ]] || native_args+=(--yes)
+    [[ -z $plan ]] || native_args+=(--plan "$plan")
+    [[ -z $from ]] || native_args+=(--from "$from")
+    [[ -z $sha ]] || native_args+=(--sha256 "$sha")
+    ((shared == 0)) || native_args+=(--shared-computer)
+    [[ -z $want_email ]] || native_args+=(--email "$want_email")
+  fi
 
   # 2. Browser. App windows need a Chromium-based browser.
   oh_ui_step "2 of 6  Browser"
@@ -481,6 +557,15 @@ oh_setup() {
     (oh_desktop_install --wait) || desktop_failed=1
     OH_CFG_LOADED=0 && oh_config_load
   fi
+  if [[ $tier == native ]]; then
+    oh_ui_step "Native Office (under a minute from a seed, about 6 minutes from Microsoft)"
+    if (oh_native_install "${native_args[@]}"); then
+      oh_dry || : >"$OH_NATIVE_DONE"
+    else
+      native_failed=1
+    fi
+    OH_CFG_LOADED=0 && oh_config_load
+  fi
 
   # Finish: the same check doctor runs.
   oh_ui_step "Checking everything"
@@ -496,15 +581,55 @@ oh_setup() {
     (oh_doctor) || true
     oh_warn "setup finished with problems; the lines marked fail above say what to fix"
   fi
-  if oh_ui_interactive && oh_ui_confirm "Open Word now?" no; then
-    oh_desktop_launch word || oh_launch word
+  if [[ $tier != native ]] && oh_ui_interactive && oh_ui_confirm "Open Word now?" no; then
+    oh_native_launch word || oh_desktop_launch word || oh_launch word
   fi
   if ((desktop_failed)); then
     oh_warn "desktop Office did not finish; the web apps work meanwhile. See: omarchohard desktop status"
+  fi
+  # The install's lock is let go first: Word and the sign-in session it
+  # starts must not hold it.
+  [[ -z ${OH_NATIVE_LOCK_FD:-} ]] || exec {OH_NATIVE_LOCK_FD}>&-
+  if ((native_failed)); then
+    oh_warn "native Office did not finish; the web apps work meanwhile. See: omarchohard native status"
+  elif [[ $tier == native ]]; then
+    # The sign-in is the last step, and its line the last line.
+    local -a signin_args=()
+    [[ -z $want_email ]] || signin_args+=(--email "$want_email")
+    if ((remote_signin)); then
+      ((lan == 0)) || signin_args+=(--lan)
+      if signin_url=$(oh_native_signin --remote "${signin_args[@]}"); then
+        signin_url=${signin_url##*Sign in here: }
+        oh_dry && signin_url=''
+      else
+        signin_url='' signin_note="the sign-in link could not start (the line above says why); sign in later with: omarchohard native signin --remote"
+      fi
+    elif [[ -n ${DISPLAY:-} ]] && oh_native_signin "${signin_args[@]}"; then
+      signin_note="Word is open on this screen for the sign-in"
+    else
+      signin_note="sign in on this screen with: omarchohard native signin, or from another device: omarchohard native signin --remote"
+    fi
+  fi
+  if [[ $tier == native ]] && ((! native_failed)); then
+    if [[ -n $signin_url ]]; then
+      printf 'Sign in here: %s\n' "$signin_url"
+    else
+      oh_say "Sign in next: $signin_note${want_email:+ (as $want_email)}"
+    fi
   fi
   if ((pause)) && oh_ui_interactive; then
     read -r -s -n 1 -p "Press any key to close." <&"$OH_TTY_FD" || true
     printf '\n' >&2
   fi
-  ((desktop_failed == 0))
+  if ((json)); then
+    trap - EXIT
+    if ((desktop_failed || native_failed)); then
+      oh_setup_json failed "" "the install did not finish; the lines above say why"
+    elif [[ $tier == native ]]; then
+      oh_setup_json needs_signin "$signin_url" "$signin_note"
+    else
+      oh_setup_json ready
+    fi
+  fi
+  ((desktop_failed == 0 && native_failed == 0))
 }
