@@ -213,14 +213,17 @@ OFFICE_V=16.0.20527.20196
   stub docker 'exit 0'
   stub git 'exit 0'
   office_cdn "$OFFICE_V"
-  run "$OH" desktop install --force
-  [ "$status" -eq 0 ]
+  # The unit is told the folders even when this shell leaves them to their
+  # defaults, or it would get the user manager's own (seen on the test host).
+  env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME "$OH" desktop install --force
   vm=$XDG_DATA_HOME/omarchohard/vm
   # shellcheck disable=SC1003 # one backslash ends the line's last folder
   [ "$(cat "$vm/oem/office-source.txt")" = '\\host.lan\Data\.local\share\omarchohard\vm\office-src' ]
   grep -qx -- --user "$HOME/systemd-run.log"
   grep -qx -- --unit=omarchohard-office-prefetch "$HOME/systemd-run.log"
   grep -qx -- "--setenv=HOME=$HOME" "$HOME/systemd-run.log"
+  grep -qx -- "--setenv=XDG_DATA_HOME=$HOME/.local/share" "$HOME/systemd-run.log"
+  grep -qx -- "--setenv=XDG_CONFIG_HOME=$HOME/.config" "$HOME/systemd-run.log"
   [ "$(tail -n2 "$HOME/systemd-run.log")" = "$(printf 'desktop\noffice-prefetch')" ]
   # The install itself downloads nothing.
   [ ! -e "$HOME/curl.log" ]

@@ -429,6 +429,14 @@ oh_office_src_drop() {
   rm -rf -- "$OH_OFFICE_SRC"
 }
 
+# A user unit gets the user manager's environment, not this shell's, so it
+# is given this shell's home, PATH and folders, spelled out: the manager's
+# own XDG folders would win where this shell leaves one unset.
+OH_UNIT_ENV=("--setenv=HOME=$HOME" "--setenv=PATH=$PATH"
+  "--setenv=XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}"
+  "--setenv=XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}"
+  "--setenv=XDG_STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}")
+
 # Start the prefetch in the background, where it outlives this command.
 # Through systemd-run --user, as oh_desktop_autopause_arm does, and not as a
 # detached process: a user service is outside the terminal and its session,
@@ -437,16 +445,12 @@ oh_office_src_drop() {
 # it can be stopped by name (systemctl --user stop omarchohard-office-prefetch).
 # A detached process (setsid) is the fallback where there is no user systemd.
 oh_office_prefetch_start() {
-  local v bin
-  local -a env=("--setenv=HOME=$HOME" "--setenv=PATH=$PATH")
+  local bin
   systemctl --user is-active --quiet "$OH_PREFETCH_UNIT.service" 2>/dev/null && return 0
   mkdir -p "$OH_OFFICE_SRC"
   rm -f -- "$OH_OFFICE_SRC/ready" "$OH_OFFICE_SRC/failed" "$OH_OFFICE_SRC/progress"
-  for v in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
-    [[ -z ${!v:-} ]] || env+=("--setenv=$v=${!v}")
-  done
   bin=$(oh_bin_path)
-  if oh_have systemd-run && oh_run systemd-run --user --quiet --collect --unit="$OH_PREFETCH_UNIT" "${env[@]}" "$bin" desktop office-prefetch 2>/dev/null; then
+  if oh_have systemd-run && oh_run systemd-run --user --quiet --collect --unit="$OH_PREFETCH_UNIT" "${OH_UNIT_ENV[@]}" "$bin" desktop office-prefetch 2>/dev/null; then
     return 0
   fi
   oh_dry && return 0
@@ -932,12 +936,7 @@ oh_desktop_autopause_arm() {
   [[ ${OH_WA[AUTOPAUSE]} == on && ${OH_WA[AUTOPAUSE_TIME]} =~ ^[0-9]+$ ]] && oh_have systemd-run || return 1
   systemctl --user is-active --quiet "$OH_AUTOPAUSE_UNIT.timer" 2>/dev/null && return 0
   # The same home, config and container engine this shell sees.
-  local v
-  local -a env=("--setenv=HOME=$HOME" "--setenv=PATH=$PATH")
-  for v in XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME; do
-    [[ -z ${!v:-} ]] || env+=("--setenv=$v=${!v}")
-  done
-  systemd-run --user --quiet --collect --unit="$OH_AUTOPAUSE_UNIT" "${env[@]}" \
+  systemd-run --user --quiet --collect --unit="$OH_AUTOPAUSE_UNIT" "${OH_UNIT_ENV[@]}" \
     --on-active="${OH_WA[AUTOPAUSE_TIME]}s" --on-unit-inactive="${OH_WA[AUTOPAUSE_TIME]}s" \
     "$(oh_bin_path)" desktop autopause
 }
