@@ -17,7 +17,7 @@ setup. Its first question is which Office you want:
 
 - **Desktop Office**: the real Windows apps, with add-ins, macros, printing
   to your Linux printers, offline use and Office's own updates. A one-time
-  install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of
+  install of about 20 minutes; needs KVM, 16 GB of memory and about 80 GB of
   disk.
 - **Web apps**: Microsoft's web apps as app windows. Ready in about two
   minutes and light on memory.
@@ -418,8 +418,10 @@ launch is a request file, not a new connection. Measured on one machine
 (2026-11-12: dockur 6.06, Windows 11 Enterprise evaluation, Microsoft 365
 Apps, FreeRDP 3, Hyprland 0.57): a Word file opened in 1.2 s through the
 agent against 2.1 s through WinApps alone, and in 0.24 to 0.33 s once the
-agent keeps Word warm. The VM used 3.4 GiB of memory, and 15 GB of disk
-after `omarchohard desktop slim`, which the first boot also runs.
+agent keeps Word warm. The VM used 3.4 GiB of memory. On 2026-11-13 a new
+VM took 20 minutes from `desktop install` to Office ready, 8.6 of them
+downloading Windows, and 12 GB of disk once the first boot's cleanup and
+the disk compression, which both run by themselves, were done.
 Details and the full table are in [docs/desktop-tier.md](docs/desktop-tier.md).
 
  The Windows VM can read your whole

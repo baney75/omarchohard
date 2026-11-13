@@ -354,7 +354,7 @@ signer_ok() {
   [ "$status" -eq 0 ]
   [[ $output == *"Desktop Office is not recommended here: "*"FreeRDP 3 is missing"* ]]
   [[ $output == *"1) Web apps: open instantly and stay light (recommended)"* ]]
-  [[ $output == *"2) Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"* ]]
+  [[ $output == *"2) Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 20 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"* ]]
   # Choosing desktop anyway runs its install at the end.
   printf '2\n1\n2\n\n\n\ny\nn\n3\nn\nn\n' >"$answers"
   OMARCHOHARD_NO_GUM=1 OMARCHOHARD_TTY=$answers run "$OH" setup

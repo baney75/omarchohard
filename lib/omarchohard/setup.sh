@@ -211,7 +211,7 @@ oh_setup_onedrive_failed() {
 # recommended only when this machine passes oh_desktop_check.
 oh_setup_tier() {
   local check why='' line choice
-  local desk="Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 45 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"
+  local desk="Desktop Office: the real Windows apps (add-ins, macros, offline, Office's own updates); one-time install of about 20 minutes; needs KVM, 16 GB of memory and about 80 GB of disk"
   local web="Web apps: open instantly and stay light"
   if [[ -f $OH_VM_DIR/compose.yaml ]] && oh_desktop_ready; then
     echo installed
@@ -474,10 +474,10 @@ oh_setup() {
     oh_optimize --apply
   fi
 
-  # Desktop Office last: it runs for about 45 minutes, and every question
+  # Desktop Office last: it runs for about 20 minutes, and every question
   # above is answered by then. A subshell, as the install ends with oh_die.
   if [[ $tier == desktop ]]; then
-    oh_ui_step "Desktop Office (about 45 minutes)"
+    oh_ui_step "Desktop Office (about 20 minutes)"
     (oh_desktop_install --wait) || desktop_failed=1
     OH_CFG_LOADED=0 && oh_config_load
   fi

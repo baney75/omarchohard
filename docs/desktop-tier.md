@@ -84,9 +84,13 @@ omarchohard desktop install --windows 11 --office 2024
 | `--office` | `m365` (Microsoft 365 Apps for enterprise, for school and work accounts), `m365-home` (Microsoft 365 Personal or Family), `2024` (Office Professional Plus 2024, ODT id `ProPlus2024Retail`), `home2024` (Office Home 2024, ODT id `Home2024Retail`), `homebusiness2024` (Office Home & Business 2024, ODT id `HomeBusiness2024Retail`), `2021` (Office Professional Plus 2021) | `m365` |
 | `--ram` | VM memory, such as `4G` or `6G` | `4G` |
 
-The whole install takes about 45 minutes: Windows installs itself in 20 to
-40, then Office installs. Watch the Windows screen at <http://127.0.0.1:8006>
-if you like.
+The whole install takes about 20 minutes. Measured on 2026-11-13 (dockur
+6.06, Windows 11 Enterprise evaluation, Microsoft 365 Apps, a new VM with
+nothing cached): 8.6 minutes downloading the 8.2 GB Windows image, 4 minutes
+of Windows Setup, then 7 minutes until Office was ready, installed from the
+host's copy. A slower connection makes the first part longer. The first
+boot's cleanup then runs for about 10 minutes in the background. Watch the
+Windows screen at <http://127.0.0.1:8006> if you like.
 
 ### Office download during Windows Setup
 
@@ -172,10 +176,15 @@ detects the old `compose.yaml` and leaves it in place.
 Without copy-on-write, btrfs does not compress the image either. Once
 Windows is set up, `omarchohard desktop compress` stops the VM, rewrites the
 image as a copy-on-write file btrfs keeps zstd-compressed, and starts the VM
-again. On the test VM (2026-11-12) the image's 13 GB of data took 7.5 GB on
-disk afterward, and the copy took 45 seconds. A new VM does it by itself,
+again. On the tiny11 test VM (2026-11-12) the image's 13 GB of data took
+7.5 GB on disk afterward, and the copy took 45 seconds. On the stock Windows
+11 Enterprise evaluation (2026-11-13), whose system and Office files Windows
+already keeps compressed, 13 GB took 12 GB and the copy took 62 seconds.
+That first stop also lets dockur delete the 8.2 GB Windows image it keeps
+until Windows has booted from its own disk; without btrfs, the first
+`desktop down` or reboot does it. A new VM does it by itself,
 once: Windows writes `slim-done` to the inbox when the first boot's cleanup
-(DISM, about 8 minutes) has ended, and the next idle pause compresses the
+(DISM, 8 to 10 minutes) has ended, and the next idle pause compresses the
 disk instead of pausing the VM. An app opened during the copy starts the VM
 again, and the disk stays as it was: run `omarchohard desktop compress`
 later. The copy
