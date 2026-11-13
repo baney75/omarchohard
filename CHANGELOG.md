@@ -18,16 +18,18 @@ builds are not listed; they carry the version of the next release plus a
   changes it, such as `omarchohard files odt,csv`. Formats you turn off go
   back to the app that had them before.
 - `setup --files microsoft|all|LIST` answers the question without asking.
+  `setup --yes` without it keeps the current choice.
 - `omarchohard desktop compress` keeps the VM's disk image zstd-compressed on
   btrfs. On the test VM it cut the image from 13 GB to 7.5 GB on disk.
-  `setup --yes` without it keeps the current choice.
+  `desktop wait` (and `install --wait`) runs it in the background once the
+  apps are in: the VM stops for about 45 seconds and starts again.
 - `.csv` files can open in Excel (`omarchohard files csv`).
 - `desktop install` downloads Office's install files on the host while
   Windows Setup runs, and Windows installs Office from that copy. On the test
-  VM, Office's download from the CDN after Setup took about 12 of a
-  15.5-minute install. The copy is checked file by file against the CDN's
-  sizes; when it fails or stalls for 2 minutes, Office installs from the CDN
-  as before. See docs/desktop-tier.md.
+  VM (tiny11, 2026-11-13) the install took 9.5 minutes instead of 15.5:
+  Office took 5 minutes after Setup instead of 12. The copy is checked file
+  by file against the CDN's sizes; when it fails or stops growing for 2
+  minutes, Office installs from the CDN as before. See docs/desktop-tier.md.
 
 ### Changed
 
@@ -42,6 +44,11 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- `desktop wait` and `desktop apps` on a reinstalled VM: WinApps refused to
+  set up over its own earlier install, so no apps were added. Its earlier
+  install is now removed first.
+- The idle-pause timer gets this shell's folders even where they are left to
+  their defaults; the user manager's own `XDG_*` folders were used instead.
 - After a package update (AUR), the first open, launch or doctor sets the
   launchers again and claims the file types omarchohard never had, such as
   .ppsm, without running `omarchohard install`. A type you gave to another
