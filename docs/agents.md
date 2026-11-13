@@ -41,13 +41,13 @@ omarchohard setup --yes --optimize \
 | `--from SRC` | Native: copy a seed instead of installing from Microsoft. A seed file, `ssh:HOST`, an `https://` link, or a private-address `http://` link with `--sha256` |
 | `--sha256 H` | Native: the seed's SHA256, checked before the seed is used or kept |
 | `--shared-computer` | Native, fresh installs, `school` and `enterprise` only: shared computer activation |
-| `--remote-signin` | Native: end with a sign-in link instead of Word on this screen. Tailscale only: on a plain network the password would cross it unencrypted, so there the person signs in on the device |
+| `--remote-signin` | Native: end with a one-time sign-in link instead of the sign-in window on this screen. The link is served only on the device's Tailscale address: on a plain network the password would cross it unencrypted, so there the person signs in on the device |
 | `--json` | Print everything for people on stderr and one JSON line on stdout at the end (see [Set up many devices](#set-up-many-devices)) |
 | `--browser B` | The browser command, such as `chromium` or `microsoft-edge-stable` |
 | `--shared` or `--isolated` | Share the everyday browser profile (default) or give Microsoft 365 its own |
 | `--apps LIST` | `all`, or a comma list of `word excel powerpoint outlook onenote teams onedrive` |
 | `--files F` | Which files open in Office: `microsoft` (default), `all`, or Microsoft formats plus a comma list of `odt ods odp rtf csv`. Without it, `--yes` keeps the current choice |
-| `--email E` | Fills in the sign-in page and OneDrive address. Native Office has no such setting; there it only names the account in the messages and the JSON |
+| `--email E` | Fills in the sign-in page and OneDrive address. In native Office the sign-in takes it as the account and skips its own email step |
 | `--no-mail` | Leave the `mailto:` handler alone |
 | `--onedrive C` | `rclone`, `abraunegg` or `none`. With `--yes`, OneDrive is skipped unless named, as its sign-in needs a person |
 | `--prewarm on\|off` | Keep a windowless browser resident (isolated profile only) |
@@ -96,7 +96,7 @@ prefix, so a signed-in Office never leaves its device.
 omarchohard setup --tier native --yes --plan personal
 ```
 
-With a display, Word opens at the end for the sign-in. The last line says
+With a display, the sign-in window opens at the end. The last line says
 what the person does next.
 
 ### A family's devices, on the home network
@@ -136,7 +136,7 @@ omarchohard setup --tier native --yes --plan school \
 The last line on stdout is one JSON object:
 
 ```json
-{"state":"needs_signin","signin_url":"http://lab-07.example.ts.net:6080/#pw=<one-time>&device=lab-07","seconds":34,"host":"lab-07","tier":"native","email":"student@school.edu","detail":""}
+{"state":"needs_signin","signin_url":"http://lab-07.example.ts.net:6080/#s=<one-time>","seconds":34,"host":"lab-07","tier":"native","email":"student@school.edu","detail":""}
 ```
 
 | `state` | Meaning |
@@ -148,17 +148,19 @@ The last line on stdout is one JSON object:
 - **Rerun it freely.** On a device that is set up, the same command reports
   `ready` at once. Two agents that start it together on one device take
   turns on a lock: one installs, the other then reports `ready`.
-- **The sign-in link** opens a page that shows only Office's sign-in window
-  from that device's hidden screen, served only on its Tailscale address
-  under its tailnet name. It works from the person's phone or laptop on the
-  same tailnet. There is no home network option: Tailscale is what encrypts
-  the password the person types. The
-  8-character password, new for each session and good until it ends, is in the link after `#`, which browsers
-  never send to a server, and the page removes it from the address bar. Hand `signin_url` to that person only, by the
-  channel you already use with them. If Word closes partway (a restart
-  after sign-in, a crash), it starts again on the same page, and each exit
-  is logged with its time in `~/.local/state/omarchohard/native/signin.log`;
-  the page stops after 30 minutes or with `omarchohard native signin --stop`, and `omarchohard native signin --remote` starts a new one.
+- **The sign-in link** opens a page served only on the device's Tailscale
+  address, under its tailnet name. It works from the person's phone or
+  laptop on the same tailnet. The page asks for the email, then shows
+  Microsoft's own sign-in page, running in a headless browser on the
+  device and laid out for the person's screen. A password and Microsoft
+  Authenticator work there; a passkey or security key does not, as it is
+  bound to the device in the person's hand. There is no home network
+  option: Tailscale is what encrypts the password the person types. The
+  link carries a one-time session id (192 bits) after `#`, which browsers
+  never send to a server, and the page removes it from the address bar.
+  Hand `signin_url` to that person only, by the channel you already use
+  with them; it stops once the person is signed in or after 30 minutes,
+  and `omarchohard native signin --remote` starts a new one.
 - **Updates.** Each device updates its own Office: a weekly user timer
   runs `omarchohard native update --auto`, and `omarchohard native update
   --check` (0.3 s) reports `update.latest` and `update.available` in

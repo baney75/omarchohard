@@ -25,7 +25,7 @@ Start here
                          [--email E] [--no-mail] [--apps LIST] [--files microsoft|all|LIST]
                          [--onedrive rclone|abraunegg|none] [--prewarm on|off] [--optimize] [--json]
                          Native: [--plan P] [--from SRC [--sha256 H]] [--shared-computer]
-                         [--remote-signin [--lan]]
+                         [--remote-signin]
 
 Everyday
   install [--isolated] [--no-mail] [--prewarm] [--apps word,excel,teams|all]
@@ -59,7 +59,7 @@ Native Office (Microsoft's desktop apps on Linux under Wine, no VM)
   native install [--plan personal|family|school|business|enterprise] [--yes]
                  [--from FILE|ssh:HOST|https://...|http://PRIVATE/... --sha256 H]
                  [--shared-computer]     First device from Microsoft, the rest from a seed
-  native signin [--remote [--lan] [--minutes N] [--port P]] | --stop
+  native signin [--remote [--minutes N] [--port P]] [--email E] | --stop
                          Sign in on this screen, or through a one-time link
   native seed --stdout | --path | serve [--minutes N] [--port P] [--lan] | serve --stop
                          Hand the pre-sign-in seed to your other devices

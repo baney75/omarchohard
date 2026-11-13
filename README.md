@@ -380,7 +380,8 @@ is extracted), installs Office into a Wine prefix in
 omarchohard native check                                   # x86_64, Hyprland, 8 GB of memory, 8 GB free disk
 omarchohard setup --tier native --plan school              # the first device: Office from Microsoft
 omarchohard setup --tier native --yes --from ssh:laptop    # every other device: a copy of the first
-omarchohard native signin --remote                         # sign in from another device, through a sign-in link
+omarchohard native signin                                  # sign in on this screen, in a browser window
+omarchohard native signin --remote                         # sign in from another device, through a one-time link
 omarchohard native status                                  # --json for scripts
 omarchohard native uninstall
 ```
@@ -431,20 +432,26 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   maps Segoe UI to it, so Office's text has its intended shapes.
 - **Disk.** The prefix takes 6.6 GB, or 3.1 GB on btrfs, where omarchohard
   turns on zstd compression for it, plus the 2.9 GB seed.
-- **Sign-in.** Once, in Word's own window; it covers every app. `native
-  signin --remote` is for a person at another device, a phone included:
-  Word opens on a hidden screen, and a page on this device's Tailscale name
-  (Tailscale only, as it encrypts the password typed through it) shows
-  only Office's sign-in window, at its real size or smaller, in light or
-  dark mode. The link carries a password, new for each session and good until it ends, after `#`, which browsers
-  never send to the server, and the page takes it out of the address bar.
-  It is printed as `Sign in here: http://laptop.example.ts.net:6080/#pw=...`
-  and sent as a notification. If Word closes partway through, it starts
-  again on the same page; the page stops after 30 minutes or with
-  `omarchohard native signin --stop`. After an abrupt exit Word may ask to
-  load the Normal template it saved; that is expected. Office has no
-  documented setting that fills in the sign-in address, so `--email` only
-  names the account in setup's messages.
+- **Sign-in.** Once; it covers every app. Word starts on a hidden screen,
+  and Microsoft's own sign-in page opens in a real browser instead of
+  Office's window. Office then takes the result and finishes the sign-in
+  itself; omarchohard never reads or keeps a token. `native signin` on
+  this screen opens it as a Chromium app window, where passkeys and security
+  keys work. `native signin --remote` is for a
+  person at another device, a phone included: it prints a one-time link to
+  a page on this device's Tailscale name (Tailscale only, as it encrypts
+  the password typed through it). The page asks for the email, then shows
+  Microsoft's sign-in page from a headless browser on this device, laid
+  out for that screen, in light or dark mode. A password and Microsoft
+  Authenticator work there; passkeys and security keys do not, as they are
+  bound to the device in the person's hand. The link carries a one-time
+  session id after `#`, which browsers never send to the server, and the
+  page takes it out of the address bar. It is printed as
+  `Sign in here: http://laptop.example.ts.net:6080/#s=...` and sent as a
+  notification. It stops once the person is signed in or after 30
+  minutes. `--email` fills in the address, so the page skips its email
+  step. Both ways need Xvfb, Python 3 and a Chromium-based
+  browser.
 - **Updates.** Office's own updater does not run under Wine, so
   omarchohard updates it. `omarchohard native update --check` compares the
   installed version with Microsoft's Current channel (0.3 s);

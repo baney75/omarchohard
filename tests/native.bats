@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Native tier: Office under wine-altars. No Wine runs: wine, wineserver,
-# curl, ssh, docker, tailscale and ip are stubs, and seeds are small tar.zst
-# files with a fake prefix in them.
+# curl, ssh, Xvfb, systemd-run, tailscale and ip are stubs, and seeds are
+# small tar.zst files with a fake prefix in them.
 
 load test_helper
 
@@ -83,22 +83,38 @@ http://*/seed*.tar.zst) exec cat "$HOME/served/${url##*/}" ;;
 esac'
 }
 
-# A docker for the remote sign-in: `run` makes the X socket and reads the
-# password file, as the container does.
-docker_signin() {
+# What a sign-in needs, as stubs: Xvfb on PATH, a tailnet with a MagicDNS
+# name, and a systemd-run that logs the unit's command line and, as the
+# bridge does once its page answers, writes the ready mark.
+signin_stubs() {
+  stub Xvfb 'exit 0'
   # shellcheck disable=SC2016 # expanded by the stub
-  stub docker 'printf "%s\n" "$*" >>"$HOME/docker.log"
-case "$1" in
-inspect) exit 1 ;;
-run)
-  for a; do case $a in *:/tmp/.X11-unix) sock=${a%:/tmp/.X11-unix} ;; *:/run/omarchohard) pw=${a%:/run/omarchohard} ;; esac; done
-  cp "$pw/pw" "$HOME/seen-pw" && rm -f "$pw/pw"
-  python3 -c "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" "$sock/X0"
-  echo container-id ;;
-esac
+  stub systemd-run 'printf "%s\n" "$@" >>"$HOME/systemd-run.log"
+case " $* " in *" signin-run "*) : >"$XDG_RUNTIME_DIR/omarchohard-signin/ready" ;; esac
 exit 0'
   # shellcheck disable=SC2016
-  stub curl 'printf "%s\n" "$*" >>"$HOME/curl.log"; exit 0'
+  stub tailscale 'case "$1 $2" in
+"ip -4") echo 100.64.1.2 ;;
+"status --json") echo "{\"Self\":{\"DNSName\":\"lab-07.tail1234.ts.net.\",\"HostName\":\"lab-07\"}}" ;;
+*) exit 1 ;;
+esac'
+}
+
+# A wine whose regedit keeps a copy of the .reg file it imports, in ~/last.reg.
+wine_keeps_reg() {
+  # shellcheck disable=SC2016 # expanded by the stub
+  printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >>"$HOME/wine.log"' \
+    '[ "$1" = regedit ] || exit 0' \
+    'f=$(printf "%s" "$3" | sed "s/^Z://; s|\\\\|/|g")' \
+    'cp "$f" "$HOME/last.reg"' >"$WINE/bin/wine"
+}
+
+# oh_native_devtools ARG, run from the sourced modules.
+devtools() {
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  bash -c 'set -euo pipefail; OH_ROOT=$1 OH_LIB=$1/lib/omarchohard OH_SHARE=$1/share/omarchohard
+    for m in common apps browser integrate open onedrive release doctor desktop native setup agent share; do source "$OH_LIB/$m.sh"; done
+    oh_native_devtools "$2"' _ "$OH_REPO_ROOT" "$1"
 }
 
 @test "native seed refuses without a seed file" {
@@ -342,54 +358,158 @@ while True:
 
 @test "remote sign-in refuses without Tailscale and starts nothing" {
   fake_installed
-  # shellcheck disable=SC2016 # expanded by the stub
-  stub docker 'printf "%s\n" "$*" >>"$HOME/docker.log"; exit 0'
+  signin_stubs
   stub tailscale 'exit 1'
   run "$OH" native signin --remote
   [ "$status" -eq 1 ]
   [[ $output == *"Tailscale is not up"*"--lan"* ]]
-  [ ! -e "$HOME/docker.log" ]
   [ ! -e "$HOME/systemd-run.log" ]
+  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin" ]
 }
 
-@test "remote sign-in binds only the tailnet address, and the link carries a session password no command line shows" {
-  fake_installed
-  docker_signin
+@test "setup --remote-signin with Tailscale down starts no sign-in, and the bridge never binds every interface" {
+  fake_wine
+  make_seed "$BATS_TEST_TMPDIR/remote.tar.zst"
   # shellcheck disable=SC2016
-  stub tailscale 'case "$1 $2" in
-"ip -4") echo 100.64.1.2 ;;
-"status --json") echo "{\"Self\":{\"DNSName\":\"lab-07.tail1234.ts.net.\",\"HostName\":\"lab-07\"}}" ;;
-*) exit 1 ;;
-esac'
+  stub ssh 'exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
+  signin_stubs
+  stub tailscale 'exit 1'
+  run "$OH" setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --remote-signin --json
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | tail -n1 | jq -e '.state == "needs_signin" and .signin_url == null'
+  [[ $output == *"Tailscale is not up"* ]]
+  [ ! -e "$HOME/systemd-run.log" ] || ! grep -qx signin-run "$HOME/systemd-run.log"
+  for addr in :6080 0.0.0.0:6080 '[::]:6080'; do
+    run timeout 10 python3 -I -B "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" \
+      --office-port 1 --display :99 --browser /bin/false --remote "$addr"
+    [ "$status" -eq 2 ]
+    [[ $output == *"tailnet address"* ]]
+  done
+}
+
+@test "after a sign-in, Word is asked to close before Wine is stopped" {
+  fake_installed
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  bash -c 'set -euo pipefail; OH_ROOT=$1 OH_LIB=$1/lib/omarchohard OH_SHARE=$1/share/omarchohard
+    for m in common apps browser integrate open onedrive release doctor desktop native setup agent share; do source "$OH_LIB/$m.sh"; done
+    oh_native_signin_end' _ "$OH_REPO_ROOT"
+  [ "$(head -n1 "$HOME/wine.log")" = "taskkill /IM WINWORD.EXE" ]
+  [ "$(head -n1 "$HOME/wineserver.log")" = -w ]
+}
+
+@test "remote sign-in binds only the tailnet address, and the link carries a one-time session id no command line shows" {
+  fake_installed
+  signin_stubs
   run "$OH" native signin --remote --minutes 3 --email ada@school.edu
   [ "$status" -eq 0 ]
   last=$(printf '%s\n' "$output" | tail -n1)
-  # The tailnet name, and the password in the fragment, which browsers never send.
-  [[ $last =~ ^Sign\ in\ here:\ http://lab-07\.tail1234\.ts\.net:6080/#pw=([A-Za-z0-9]{8})\&device=lab-07$ ]]
-  pw=${BASH_REMATCH[1]}
-  [[ $output == *"sign in as ada@school.edu"* ]]
-  [ "$(cat "$HOME/seen-pw")" = "$pw" ]
-  grep -qF -- '-p 100.64.1.2:6080:6080' "$HOME/docker.log"
-  run grep -E -- '-p (0\.0\.0\.0:)?[0-9]+:' "$HOME/docker.log"
+  # The tailnet name, and 192 bits in the fragment, which browsers never send.
+  [[ $last =~ ^Sign\ in\ here:\ http://lab-07\.tail1234\.ts\.net:6080/#s=([0-9a-f]{48})$ ]]
+  sid=${BASH_REMATCH[1]}
+  [[ $output == *"shared only on 100.64.1.2, for ada@school.edu"* ]]
+  [[ $output == *"after 3 minutes"* ]]
+  # The bridge reads the id from a file only this user can read, and removes it.
+  f=$XDG_RUNTIME_DIR/omarchohard-signin/session
+  [ "$(cat "$f")" = "$sid" ]
+  [ "$(stat -c %a "$f")" = 600 ]
+  [ "$(stat -c %a "${f%/*}")" = 700 ]
+  run grep -rF -- "$sid" "$HOME/systemd-run.log"
   [ "$status" -ne 0 ]
-  run grep -rF -- "$pw" "$HOME/docker.log" "$HOME/systemd-run.log" "$HOME/curl.log"
+  log=$HOME/systemd-run.log
+  grep -qx -- '--unit=omarchohard-native-signin' "$log"
+  grep -qx 'signin-run' "$log"
+  grep -qx '3' "$log"
+  grep -qx -- '--remote' "$log"
+  grep -qx '100.64.1.2:6080' "$log"
+  grep -qx 'lab-07' "$log"
+  grep -qx 'ada@school.edu' "$log"
+  run grep -E '0\.0\.0\.0|signin-watch' "$log"
   [ "$status" -ne 0 ]
-  grep -qx 'signin-watch' "$HOME/systemd-run.log"
-  grep -qx '3' "$HOME/systemd-run.log"
-  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin/pw/pw" ]
+  # Each start draws a new id.
+  rm -rf "$XDG_RUNTIME_DIR/omarchohard-signin" "$log"
+  run "$OH" native signin --remote --port 6084
+  [ "$status" -eq 0 ]
+  [[ $(printf '%s\n' "$output" | tail -n1) =~ ^Sign\ in\ here:\ http://lab-07\.tail1234\.ts\.net:6084/#s=([0-9a-f]{48})$ ]]
+  [ "${BASH_REMATCH[1]}" != "$sid" ]
+  grep -qx '100.64.1.2:6084' "$log"
 }
 
-@test "--lan binds the LAN address for the seed server only; the sign-in page refuses a plain LAN" {
+@test "a dry run of the remote sign-in prints the unit and the link's shape and starts nothing" {
   fake_installed
-  docker_signin
+  signin_stubs
+  OMARCHOHARD_DRY_RUN=1 run "$OH" native signin --remote --port 6081 --minutes 5
+  [ "$status" -eq 0 ]
+  [[ $output == *"would run: systemd-run --user --quiet --collect --unit=omarchohard-native-signin "*" native signin-run 5 --remote 100.64.1.2:6081 --device lab-07"* ]]
+  [ "$(printf '%s\n' "$output" | tail -n1)" = 'Sign in here: http://lab-07.tail1234.ts.net:6081/#s=<session>' ]
+  [ ! -e "$HOME/systemd-run.log" ]
+  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin" ]
+}
+
+@test "the sign-in on this screen opens its window here, with no link and no session file" {
+  fake_installed
+  signin_stubs
+  run "$OH" native signin --email ada@school.edu
+  [ "$status" -eq 0 ]
+  [[ $output == *"The sign-in window is open on this screen for ada@school.edu."* ]]
+  [[ $output != *"Sign in here"* ]]
+  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin/session" ]
+  grep -qx 'signin-run' "$HOME/systemd-run.log"
+  grep -qx -- '--setenv=WAYLAND_DISPLAY=oh-test' "$HOME/systemd-run.log"
+  run grep -x -- '--remote' "$HOME/systemd-run.log"
+  [ "$status" -ne 0 ]
+  # With no screen here, the way is the remote sign-in.
+  rm -rf "$XDG_RUNTIME_DIR/omarchohard-signin" "$HOME/systemd-run.log"
+  WAYLAND_DISPLAY='' run "$OH" native signin
+  [ "$status" -eq 1 ]
+  [[ $output == *"there is no screen here for the sign-in window"*"native signin --remote"* ]]
+  [ ! -e "$HOME/systemd-run.log" ]
+}
+
+@test "the sign-in is refused while one runs, before Office is set up, and without Xvfb or a browser" {
+  signin_stubs
+  run "$OH" native signin --remote
+  [ "$status" -eq 1 ]
+  [[ $output == *"native Office is not set up yet"* ]]
+  fake_installed
+  # A sign-in whose process is alive: this test's own shell stands in.
+  mkdir -p "$XDG_RUNTIME_DIR/omarchohard-signin"
+  printf '%s\n' "$$" >"$XDG_RUNTIME_DIR/omarchohard-signin/pid"
+  for args in --remote ""; do
+    # shellcheck disable=SC2086 # the empty case is no argument at all
+    run "$OH" native signin $args
+    [ "$status" -eq 1 ]
+    [[ $output == *"a sign-in is already running; stop it with: omarchohard native signin --stop"* ]]
+  done
+  rm -rf "$XDG_RUNTIME_DIR/omarchohard-signin"
+  # The configured browser is gone.
+  printf 'browser=no-such-browser\n' >"$XDG_CONFIG_HOME/omarchohard/config"
+  run "$OH" native signin --remote
+  [ "$status" -eq 1 ]
+  [[ $output == *"no-such-browser"*"not found"* ]]
+  printf 'browser=chromium\n' >"$XDG_CONFIG_HOME/omarchohard/config"
+  [ ! -e "$HOME/systemd-run.log" ]
+  # No Xvfb: only where the machine has none of its own.
+  rm "$STUBS/Xvfb"
+  if command -v Xvfb >/dev/null; then
+    skip "this machine has a real Xvfb"
+  fi
+  run "$OH" native signin --remote
+  [ "$status" -eq 1 ]
+  [[ $output == *"needs Xvfb: omarchy pkg add xorg-server-xvfb"* ]]
+  [ ! -e "$HOME/systemd-run.log" ]
+}
+
+@test "--lan binds the LAN address for the seed server only; the sign-in refuses a plain LAN" {
+  fake_installed
+  signin_stubs
   # shellcheck disable=SC2016
   stub ip '[ "$1 $2 $3" = "-4 route get" ] && echo "1.1.1.1 via 192.168.1.1 dev wlan0 src 192.168.1.20 uid 1000"'
   stub tailscale 'echo 100.64.1.2'
-  # The password typed on the page would cross a plain LAN unencrypted.
+  # The page is plain HTTP; on a plain LAN the password would cross it unencrypted.
   run "$OH" native signin --remote --lan --port 6081
   [ "$status" -eq 1 ]
   [[ $output == *"remote sign-in works only over Tailscale"* ]]
-  [ ! -e "$HOME/docker.log" ]
+  [ ! -e "$HOME/systemd-run.log" ]
   run "$OH" setup --tier native --yes --remote-signin --lan
   [ "$status" -eq 1 ]
   [[ $output == *"remote sign-in works only over Tailscale"* ]]
@@ -410,6 +530,55 @@ esac'
   run "$OH" native seed serve --lan
   [ "$status" -eq 1 ]
   [[ $output == *"no private LAN address found (got '203.0.113.9')"* ]]
+}
+
+@test "the sign-in opens Office's DevTools port in all three WebView2 policy keys and closes it again" {
+  fake_installed
+  wine_keeps_reg
+  run devtools 9333
+  [ "$status" -eq 0 ]
+  [ -e "$NATIVE/devtools-on" ]
+  grep -qE '^regedit /S Z:\\.*\\devtools-[A-Za-z0-9]+\.reg$' "$HOME/wine.log"
+  # regedit's own format: CRLF lines, and the file is gone once imported.
+  [ "$(head -n1 "$HOME/last.reg")" = $'Windows Registry Editor Version 5.00\r' ]
+  [ -z "$(find "$NATIVE" -name 'devtools-*.reg')" ]
+  reg=$(tr -d '\r' <"$HOME/last.reg")
+  for k in 'HKEY_CURRENT_USER\Software' 'HKEY_LOCAL_MACHINE\Software' 'HKEY_LOCAL_MACHINE\Software\Wow6432Node'; do
+    grep -qxF "[$k\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments]" <<<"$reg"
+  done
+  [ "$(grep -cxF '"*"="--remote-debugging-port=9333"' <<<"$reg")" -eq 3 ]
+  run devtools off
+  [ "$status" -eq 0 ]
+  [ ! -e "$NATIVE/devtools-on" ]
+  reg=$(tr -d '\r' <"$HOME/last.reg")
+  for k in 'HKEY_CURRENT_USER\Software' 'HKEY_LOCAL_MACHINE\Software' 'HKEY_LOCAL_MACHINE\Software\Wow6432Node'; do
+    grep -qxF "[-$k\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments]" <<<"$reg"
+  done
+  run grep -F 'remote-debugging-port' <<<"$reg"
+  [ "$status" -ne 0 ]
+  [ -z "$(find "$NATIVE" -name 'devtools-*.reg')" ]
+}
+
+@test "a sign-in that died leaves the DevTools port open only until Office starts or the sign-in is stopped" {
+  fake_installed
+  wine_keeps_reg
+  : >"$NATIVE/devtools-on"
+  DISPLAY=:9 run "$OH" native run word
+  [ "$status" -eq 0 ]
+  [ ! -e "$NATIVE/devtools-on" ]
+  grep -qF '[-HKEY_CURRENT_USER\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments]' "$HOME/last.reg"
+  # --stop stops the unit, closes the port and removes the sign-in's folder.
+  rm "$HOME/last.reg"
+  : >"$NATIVE/devtools-on"
+  mkdir -p "$XDG_RUNTIME_DIR/omarchohard-signin"
+  : >"$XDG_RUNTIME_DIR/omarchohard-signin/session"
+  run "$OH" native signin --stop
+  [ "$status" -eq 0 ]
+  [[ $output == *"sign-in stopped"* ]]
+  grep -qx -- '--user stop omarchohard-native-signin.service' "$HOME/systemctl.log"
+  [ ! -e "$NATIVE/devtools-on" ]
+  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin" ]
+  grep -qF '[-HKEY_LOCAL_MACHINE\Software\Wow6432Node\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments]' "$HOME/last.reg"
 }
 
 @test "the seed server answers only its token path, for the given time" {
@@ -435,24 +604,123 @@ esac'
   [ "$status" -ne 0 ]
 }
 
-@test "the sign-in page takes the password from the fragment, drops it, and fits only the shared window" {
-  page=$OH_REPO_ROOT/share/omarchohard/native-remote/index.html
-  grep -qF "import RFB from './core/rfb.js'" "$page"
-  grep -qF "new URLSearchParams(location.hash.slice(1))" "$page"
-  grep -qF "history.replaceState(null, '', location.pathname)" "$page"
-  grep -qF '<meta name="referrer" content="no-referrer">' "$page"
+@test "the sign-in page takes the session from the fragment, drops it, and never asks for a password" {
+  page=$OH_REPO_ROOT/share/omarchohard/native-signin/index.html
+  grep -qF '<title>Sign in to Microsoft 365</title>' "$page"
+  grep -qF 'const sid = new URLSearchParams(location.hash.slice(1)).get("s") || "";' "$page"
+  grep -qF 'history.replaceState(null, "", location.pathname);' "$page"
+  grep -qF '"X-Session": sid' "$page"
   grep -qF 'prefers-color-scheme' "$page"
-  # Never scaled above the real size.
-  grep -qF 'Math.min(aw / c.width, ah / c.height, 1)' "$page"
-  run grep -E 'location\.search|password=' "$page"
-  [ "$status" -ne 0 ]
-  entry=$OH_REPO_ROOT/share/omarchohard/native-remote/entry.sh
-  # shellcheck disable=SC2016 # a literal line of entry.sh
-  grep -qF 'x11vnc -display :0 -R "clip:$clip"' "$entry"
-  grep -qF -- '-passwdfile rm:/run/omarchohard/pw' "$entry"
-  run grep -iE 'openbox|vnc\.html|/usr/share/novnc 6080' "$entry"
+  # The password goes only into Microsoft's own page.
+  run grep -iE 'type="?password|location\.search|localStorage|sessionStorage' "$page"
   [ "$status" -ne 0 ]
   # The page in a browser: tests/live/signin-page.cjs, against a live session.
+}
+
+@test "the local sign-in window's first page load finds the bridge listening" {
+  # A browser that loads its --app page the moment it starts, then quits.
+  cat >"$BATS_TEST_TMPDIR/browser" <<'PY'
+#!/usr/bin/env python3
+import os, sys, urllib.request
+url = next(a[len("--app="):] for a in sys.argv if a.startswith("--app="))
+try:
+    with urllib.request.urlopen(url.split("#")[0], timeout=5) as r:
+        got = str(r.status)
+except OSError as e:
+    got = "error: %s" % e
+open(os.environ["OH_GOT"], "w").write(got + "\n")
+PY
+  chmod +x "$BATS_TEST_TMPDIR/browser"
+  OH_GOT=$BATS_TEST_TMPDIR/got run timeout 60 python3 -I -B "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" \
+    --office-port 1 --display :99 --browser "$BATS_TEST_TMPDIR/browser" --minutes 1
+  [ "$(cat "$BATS_TEST_TMPDIR/got")" = 200 ]
+}
+
+@test "the bridge's page server answers only its session, and serves the page with a CSP" {
+  run python3 -I -B - "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" <<'PY'
+import http.client, importlib.util, json, queue, socket, sys
+
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+bridge = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bridge)
+
+sid = "0123456789abcdef" * 3
+hub = bridge.Hub("lab-07", "remote", "")
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+port = sock.getsockname()[1]
+bridge.serve(hub, sid, sock, None)
+bad = []
+
+def check(name, ok):
+    if not ok:
+        bad.append(name)
+        print("FAIL", name)
+
+def req(method, path, body=None, headers=None):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request(method, path, body, headers or {})
+    return c.getresponse()
+
+r = req("GET", "/")
+page = r.read()
+csp = r.getheader("Content-Security-Policy") or ""
+check("page 200", r.status == 200)
+check("page html", (r.getheader("Content-Type") or "").startswith("text/html"))
+check("page title", b"<title>Sign in to Microsoft 365</title>" in page)
+check("csp default-src none", "default-src 'none'" in csp)
+check("csp frame-ancestors none", "frame-ancestors 'none'" in csp)
+check("csp connect-src self", "connect-src 'self'" in csp)
+check("no referrer", r.getheader("Referrer-Policy") == "no-referrer")
+check("no store", r.getheader("Cache-Control") == "no-store")
+
+for q in ("", "?s=", "?s=" + "f" * 48, "?s=" + sid[:-1], "?s=" + sid + "0"):
+    r = req("GET", "/events" + q)
+    r.read()
+    check("events refused " + repr(q), r.status == 404)
+r = req("GET", "/events?s=" + sid)
+check("events 200", r.status == 200)
+check("events stream", r.getheader("Content-Type") == "text/event-stream")
+check("events first is state", r.readline() == b"event: state\n")
+state = json.loads(r.readline().decode().removeprefix("data: "))
+check("state email step", state.get("step") == "email" and state.get("device") == "lab-07" and state.get("mode") == "remote")
+r.close()
+
+# Refused calls and then the right one, on one kept-alive connection: a
+# refused body must not be read as the next request.
+msg = json.dumps({"t": "email", "v": "ada@school.edu"})
+c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+for h in ({}, {"X-Session": ""}, {"X-Session": "f" * 48}, {"X-Session": sid.upper()}):
+    c.request("POST", "/api", msg, h)
+    r = c.getresponse()
+    r.read()
+    check("api refused " + repr(h), r.status == 404)
+check("refused calls reach nothing", hub.inbox.empty())
+c.request("POST", "/api", msg, {"X-Session": sid, "Content-Type": "application/json"})
+r = c.getresponse()
+r.read()
+check("api 200 on the same connection", r.status == 200)
+c.close()
+try:
+    got = hub.inbox.get_nowait()
+except queue.Empty:
+    got = None
+check("api delivers", got == {"t": "email", "v": "ada@school.edu"})
+r = req("POST", "/api", "{not json", {"X-Session": sid})
+r.read()
+check("api bad json 400", r.status == 400)
+r = req("POST", "/api", None, {"X-Session": sid, "Content-Length": "65537"})
+check("api too big 413", r.status == 413)
+r = req("POST", "/api", None, {"X-Session": sid, "Content-Length": "-1"})
+check("api negative length 400", r.status == 400)
+r = req("GET", "/other")
+r.read()
+check("unknown path 404", r.status == 404)
+print("FAILED" if bad else "ok")
+sys.exit(1 if bad else 0)
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = ok ]
 }
 
 @test "dry run prints the plan and changes nothing" {
@@ -523,12 +791,16 @@ esac'
   # shellcheck disable=SC2016
   stub ssh 'printf "%s\n" "$*" >>"$HOME/ssh.log"; sleep 1; exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
   args=(setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --email ada@school.edu --json)
-  "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/a.json" 2>"$BATS_TEST_TMPDIR/a.err" &
-  "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/b.json" 2>"$BATS_TEST_TMPDIR/b.err"
+  # No screen here, so the sign-in is a note, not a window.
+  WAYLAND_DISPLAY='' "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/a.json" 2>"$BATS_TEST_TMPDIR/a.err" &
+  WAYLAND_DISPLAY='' "$OH" "${args[@]}" >"$BATS_TEST_TMPDIR/b.json" 2>"$BATS_TEST_TMPDIR/b.err"
   wait
   [ "$(wc -l <"$HOME/ssh.log")" -eq 1 ]
   states=$(cat "$BATS_TEST_TMPDIR/a.json" "$BATS_TEST_TMPDIR/b.json" | jq -r .state | sort | paste -sd,)
-  [ "$states" = "needs_signin,ready" ]
+  [ "$states" = "needs_signin,ready" ] || {
+    tail -n 5 "$BATS_TEST_TMPDIR"/[ab].json "$BATS_TEST_TMPDIR"/[ab].err
+    false
+  }
   for f in a b; do
     [ "$(wc -l <"$BATS_TEST_TMPDIR/$f.json")" -eq 1 ]
     jq -e '(.seconds | type) == "number" and .tier == "native" and .email == "ada@school.edu" and has("signin_url")' "$BATS_TEST_TMPDIR/$f.json"
@@ -547,23 +819,38 @@ esac'
   [ "$(wc -l <"$HOME/ssh.log")" -eq 1 ]
 }
 
+@test "setup with a screen still reports needs_signin when the sign-in window cannot open" {
+  fake_wine
+  make_seed "$BATS_TEST_TMPDIR/remote.tar.zst"
+  # shellcheck disable=SC2016
+  stub ssh 'exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
+  # A sign-in already running makes the window refuse to open.
+  mkdir -p "$XDG_RUNTIME_DIR/omarchohard-signin"
+  printf '%s\n' "$$" >"$XDG_RUNTIME_DIR/omarchohard-signin/pid"
+  WAYLAND_DISPLAY=oh-test run "$OH" setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --json
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | tail -n1 | jq -e '.state == "needs_signin" and (.detail | test("omarchohard native signin"))'
+  rm -rf "$XDG_RUNTIME_DIR/omarchohard-signin"
+}
+
 @test "setup --tier native --remote-signin prints the sign-in link last" {
   fake_wine
   make_seed "$BATS_TEST_TMPDIR/remote.tar.zst"
   # shellcheck disable=SC2016
   stub ssh 'exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
-  docker_signin
+  signin_stubs
   stub tailscale 'echo 100.64.1.2'
   run "$OH" setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --remote-signin
   [ "$status" -eq 0 ]
-  [[ $(printf '%s\n' "$output" | tail -n1) =~ ^Sign\ in\ here:\ http://100\.64\.1\.2:6080/#pw=[A-Za-z0-9]{8}\&device=[A-Za-z0-9.-]+$ ]]
+  [[ $(printf '%s\n' "$output" | tail -n1) =~ ^Sign\ in\ here:\ http://100\.64\.1\.2:6080/#s=[0-9a-f]{48}$ ]]
+  grep -qx 'signin-run' "$HOME/systemd-run.log"
   rm -rf "$NATIVE/setup-done"
   run "$OH" native uninstall --yes
   make_seed "$BATS_TEST_TMPDIR/remote.tar.zst"
   fake_wine
   run "$OH" setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --remote-signin --json
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | tail -n1 | jq -e '.state == "needs_signin" and (.signin_url | test("^http://100\\.64\\.1\\.2:6080/#pw=[A-Za-z0-9]{8}&device="))'
+  printf '%s\n' "$output" | tail -n1 | jq -e '.state == "needs_signin" and (.signin_url | test("^http://100\\.64\\.1\\.2:6080/#s=[0-9a-f]{48}$"))'
 }
 
 @test "setup --json reports failed when the native install fails or an option is wrong" {
@@ -772,27 +1059,6 @@ box_line() { grep -F -- "$1" "$HOME/bwrap.log" | tail -n1; }
   [ "$status" -eq 0 ]
   grep -qF 'https://outlook.office.com/mail/deeplink/compose?to=ada@example.com' "$HOME/chromium.log"
   [ ! -e "$HOME/wine.log" ]
-}
-
-@test "the remote sign-in starts Word again when it closes, logs each exit, and ends with its screen" {
-  fake_installed
-  # shellcheck disable=SC2016
-  stub docker 'printf "%s\n" "$*" >>"$HOME/docker.log"; exit 0'
-  sock=$XDG_RUNTIME_DIR/omarchohard-signin/xsock/X0
-  mkdir -p "${sock%/*}"
-  python3 -c "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" "$sock"
-  # Word exits at once; the third time, the screen goes too (signin --stop).
-  # shellcheck disable=SC2016
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$HOME/wine.log"\n[ "$(wc -l <"$HOME/wine.log")" -ge 3 ] && rm -f "%s"\nexit 1\n' "$sock" >"$WINE/bin/wine"
-  run "$OH" native signin-watch 5 "unix:$sock"
-  [ "$status" -eq 0 ]
-  [ "$(grep -c 'WINWORD.EXE' "$HOME/wine.log")" -eq 3 ]
-  log=$XDG_STATE_HOME/omarchohard/native/signin.log
-  [ "$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z Word exited \(code 1\); starting it again$' "$log")" -eq 2 ]
-  grep -qE 'remote sign-in started for 5 minutes$' "$log"
-  grep -qE 'remote sign-in stopped$' "$log"
-  grep -qx 'rm -f omarchohard-native-signin' "$HOME/docker.log"
-  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin" ]
 }
 
 # Office's Current channel at VERSION, and an ODT whose /configure moves the

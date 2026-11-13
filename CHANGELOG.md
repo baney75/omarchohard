@@ -21,10 +21,15 @@ builds are not listed; they carry the version of the next release plus a
 - `--plan personal|family|school|business|enterprise` picks the Office
   product, and a seed for another product is refused. `--shared-computer`
   turns on shared computer activation for school and enterprise plans.
-- `omarchohard native signin --remote` shows only Office's sign-in window,
-  as a page on the device's Tailscale name only (never a plain LAN) that
-  fits a phone, in light or dark mode, behind a random password, new for each session and good until it ends, carried
-  after `#` in the link, and prints the link last as `Sign in here: ...`.
+- `omarchohard native signin` runs Microsoft's own sign-in page in a real
+  browser and hands the result to Office, which waits on a hidden screen.
+  On this screen it is a Chromium app window, where passkeys and security
+  keys work. `--remote` prints a one-time link, `Sign in here: ...#s=...`,
+  to a page on the device's Tailscale name only (never a plain LAN) that
+  streams the sign-in from a headless browser to a phone or another
+  computer; a password and Microsoft Authenticator work there, passkeys do
+  not. It needs Xvfb, Python 3 and a Chromium-based browser, and no
+  container.
 - Native Office maps Segoe UI to Selawik, Microsoft's open-source stand-in
   (SIL OFL 1.1, shipped with omarchohard), so Office's text looks as meant.
 - `omarchohard native update [--check]` updates native Office to the

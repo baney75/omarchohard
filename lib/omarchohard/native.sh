@@ -1000,7 +1000,7 @@ oh_native_python() {
 # until N minutes are up. Prints the --from and --sha256 the other devices
 # take.
 oh_native_seed_serve() {
-  local minutes=60 port=$OH_NATIVE_SERVE_PORT lan=0 f sha ip token envf py engine tag url i name
+  local minutes=60 port=$OH_NATIVE_SERVE_PORT lan=0 f sha ip token envf py url i name
   while (($#)); do
     case $1 in
     --minutes) minutes=${2:?--minutes needs a number} && shift ;;
@@ -1043,13 +1043,7 @@ oh_native_seed_serve() {
   elif [[ -n $py ]]; then
     OH_SEED_TOKEN=$token setsid -f "$py" "$OH_SHARE/native-remote/seed-serve.py" "$ip" "$port" "$f" "$((minutes * 60))" </dev/null >/dev/null 2>&1
   else
-    # No Python on this machine: the sign-in image has it.
-    engine=$(oh_native_engine) || oh_die "seed serve needs python3, or Docker or Podman"
-    tag=$(oh_native_image "$engine")
-    OH_SEED_TOKEN=$token "$engine" run -d --rm --name "$OH_NATIVE_SERVE" -u "$(id -u):$(id -g)" -e OH_SEED_TOKEN \
-      -p "$ip:$port:8080" -v "$f:/seed/$name:ro" --entrypoint python3 "$tag" \
-      /usr/local/share/omarchohard/seed-serve.py 0.0.0.0 8080 "/seed/$name" "$((minutes * 60))" >/dev/null ||
-      oh_die "could not start the seed server (is port $port on $ip free? try --port)"
+    oh_die "seed serve needs python3 (omarchy pkg add python)"
   fi
   for ((i = 0; i < 50; i++)); do
     # shellcheck disable=SC2016 # expanded by the inner bash
@@ -1084,6 +1078,8 @@ oh_native_run() {
   [[ -n $exe ]] || oh_die "usage: omarchohard native run word|excel|powerpoint|outlook|onenote [FILE...]"
   shift
   oh_native_ready || oh_die "native Office is not set up yet (omarchohard native install)"
+  # A sign-in that died leaves its DevTools port open; close it first.
+  [[ ! -e $OH_NATIVE_DIR/devtools-on ]] || oh_native_signin_running || oh_native_devtools off
   oh_native_has "$app" || oh_die "$(oh_app_name "$app") is not installed in $OH_NATIVE_PREFIX"
   [[ -n ${DISPLAY:-} ]] || oh_die "no X display (DISPLAY is not set); run this in your desktop session, where Xwayland shows Office's windows"
   local -a args=()
@@ -1213,72 +1209,136 @@ oh_native_launch() {
 
 oh_native_engine() { oh_desktop_engine; }
 
-oh_native_signin_running() {
-  local engine
-  engine=$(oh_native_engine 2>/dev/null) || return 1
-  [[ $("$engine" inspect -f '{{.State.Running}}' "$OH_NATIVE_SIGNIN" 2>/dev/null) == true ]]
-}
-
-# Where the remote session keeps its X socket and the session's password
-# file: the runtime folder (memory, this user only) when there is one.
+# Where a sign-in keeps its pid, its link's session id until the bridge has
+# read it, and its ready mark: the runtime folder (memory, this user only)
+# when there is one.
 oh_native_signin_dir() {
   local base=${XDG_RUNTIME_DIR:-}
   [[ -n $base && -d $base && -w $base ]] || base=$OH_STATE_DIR
   printf '%s\n' "$base/omarchohard-signin"
 }
 
-# The image, tagged by its own files, so a change rebuilds it.
-oh_native_image() {
-  local engine=$1 dir=$OH_SHARE/native-remote tag
-  tag=$OH_NATIVE_IMAGE:$(cat -- "$dir/Dockerfile" "$dir/entry.sh" "$dir/index.html" "$dir/seed-serve.py" | sha256sum | cut -c1-12)
-  if ! "$engine" image inspect "$tag" >/dev/null 2>&1; then
-    oh_say "Building the sign-in page's image (about a minute, once)..."
-    oh_run "$engine" build -q -t "$tag" "$dir" >/dev/null || oh_die "could not build $tag from $dir"
-  fi
-  printf '%s\n' "$tag"
+oh_native_signin_running() {
+  local pid
+  pid=$(cat -- "$(oh_native_signin_dir)/pid" 2>/dev/null) || return 1
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
 oh_native_signin_stop() {
-  local engine dir
+  local dir pid i
   dir=$(oh_native_signin_dir)
-  if engine=$(oh_native_engine 2>/dev/null); then
-    oh_run "$engine" rm -f "$OH_NATIVE_SIGNIN" >/dev/null 2>&1 || true
+  oh_run systemctl --user stop "$OH_NATIVE_SIGNIN.service" >/dev/null 2>&1 || true
+  if pid=$(cat -- "$dir/pid" 2>/dev/null) && [[ $pid =~ ^[0-9]+$ ]]; then
+    kill -TERM "$pid" 2>/dev/null || true
+    for ((i = 0; i < 400; i++)); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
   fi
   oh_run rm -rf -- "$dir"
+  [[ ! -e $OH_NATIVE_DIR/devtools-on ]] || oh_native_devtools off
 }
 
-# `native signin-watch MINUTES DISPLAY`, the remote session's own process:
-# Word on the hidden screen until the time is up. Word closing (a restart
-# after sign-in, a license box, a crash) must not end the page the person
-# has open, so Word starts again; each exit goes to the journal and to
-# $OH_STATE_DIR/native/signin.log with its time. `signin --stop` ends it too.
-oh_native_signin_watch() {
-  local minutes=${1:?} display=${2:?} rc=0 end left log sock
-  local -a env
-  [[ $minutes =~ ^[0-9]+$ ]] || oh_die "minutes must be a number"
-  trap 'oh_native_ws -k 2>/dev/null; oh_native_signin_stop; exit 143' TERM INT
-  mapfile -t env < <(oh_native_env)
-  sock=$(oh_native_signin_dir)/xsock
-  oh_native_box app "$sock"
-  log=$OH_STATE_DIR/native/signin.log
-  mkdir -p -- "${log%/*}"
-  printf '%s remote sign-in started for %s minutes\n' "$(date -u +%FT%TZ)" "$minutes" >>"$log"
-  end=$((SECONDS + minutes * 60))
-  while :; do
-    left=$((end - SECONDS))
-    ((left > 0)) || break
-    rc=0
-    timeout -k 10 "$left" "${OH_BOX[@]}" env DISPLAY="$display" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 || rc=$?
-    ((rc != 124 && rc != 137)) || break
-    # The screen is gone (`signin --stop` from another shell): nothing to show.
-    [[ -S ${display#unix:} ]] || break
-    printf '%s Word exited (code %s); starting it again\n' "$(date -u +%FT%TZ)" "$rc" | tee -a -- "$log"
-    sleep 2
+# Office's sign-in window (WebView2) answers the DevTools protocol on PORT,
+# on 127.0.0.1, while a sign-in runs; `off` closes it. A mark file says it is
+# open, so a sign-in that died is closed by the next start of Office.
+oh_native_devtools() {
+  local reg k key
+  oh_dry && {
+    oh_say "would set Office's sign-in window DevTools to: $1"
+    return 0
+  }
+  reg=$(mktemp "$OH_NATIVE_DIR/devtools-XXXXXX.reg")
+  {
+    printf 'Windows Registry Editor Version 5.00\r\n\r\n'
+    for k in 'HKEY_CURRENT_USER\Software' 'HKEY_LOCAL_MACHINE\Software' 'HKEY_LOCAL_MACHINE\Software\Wow6432Node'; do
+      key="$k\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments"
+      if [[ $1 == off ]]; then
+        printf '[-%s]\r\n\r\n' "$key"
+      else
+        printf '[%s]\r\n"*"="--remote-debugging-port=%s"\r\n\r\n' "$key" "$1"
+      fi
+    done
+  } >"$reg"
+  [[ $1 == off ]] || : >"$OH_NATIVE_DIR/devtools-on"
+  oh_native_wine regedit /S "Z:${reg//\//\\}" >/dev/null 2>&1 || true
+  rm -f -- "$reg"
+  [[ $1 != off ]] || rm -f -- "$OH_NATIVE_DIR/devtools-on"
+}
+
+# What a sign-in needs on this machine; dies naming the fix.
+oh_native_signin_needs() {
+  local remote=$1
+  oh_native_ready || oh_die "native Office is not set up yet (omarchohard native install)"
+  oh_native_python >/dev/null || oh_die "the sign-in needs python3 (omarchy pkg add python)"
+  oh_have Xvfb || oh_die "the sign-in runs Office on a hidden screen and needs Xvfb: omarchy pkg add xorg-server-xvfb"
+  oh_browser_bin >/dev/null || oh_die "the sign-in needs a Chromium-based browser: omarchy pkg add chromium"
+  ((remote)) || [[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]] ||
+    oh_die "there is no screen here for the sign-in window; sign in from another device: omarchohard native signin --remote"
+  ! oh_native_signin_running || oh_die "a sign-in is already running; stop it with: omarchohard native signin --stop"
+  [[ -z $(oh_native_app_pids) ]] || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first; the sign-in starts Office on its own"
+}
+
+# `native signin-run MINUTES [--remote IP:PORT] [--email E] [--device D]`,
+# the sign-in's own process: Word on a hidden screen with its sign-in window
+# open to DevTools, the bridge, then all of it stopped and closed again.
+oh_native_signin_run() {
+  local minutes=${1:?} remote='' email='' device='' dir bin py port rc=0
+  shift
+  while (($#)); do
+    case $1 in
+    --remote) remote=${2:?} && shift ;;
+    --email) email=${2:?} && shift ;;
+    --device) device=${2:?} && shift ;;
+    *) oh_die "usage: omarchohard native signin-run MINUTES [--remote IP:PORT] [--email E] [--device D]" ;;
+    esac
+    shift
   done
+  dir=$(oh_native_signin_dir)
+  mkdir -p -- "$dir"
+  printf '%s\n' "$$" >"$dir/pid"
+  bin=$(oh_browser_bin)
+  py=$(oh_native_python) || oh_die "the sign-in needs python3"
+  oh_native_stop_wine
+  oh_native_hidden_start || oh_die "the hidden screen did not start (Xvfb)"
+  trap 'oh_native_signin_end' EXIT
+  trap 'exit 143' TERM INT HUP
+  port=$("$py" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  oh_native_devtools "$port"
+  local -a env args
+  mapfile -t env < <(oh_native_env)
+  # In the apps' sandbox when it is on, so the Wine server stays one per prefix.
+  oh_native_box app
+  "${OH_BOX[@]}" env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
+  args=(--office-port "$port" --office-pid "$!" --display "$OH_HIDDEN_DISPLAY" --browser "$bin" --minutes "$minutes" --ready-file "$dir/ready")
+  [[ -z $email ]] || args+=(--email "$email")
+  [[ -z $device ]] || args+=(--device "$device")
+  [[ -z $remote ]] || args+=(--remote "$remote" --session-file "$dir/session")
+  # In the background with a wait, so a stop signal (signin --stop without
+  # systemd) runs the trap at once and reaches the bridge too.
+  "$py" "$OH_SHARE/native-signin/bridge.py" "${args[@]}" &
+  OH_SIGNIN_BRIDGE=$!
+  trap 'kill -TERM "$OH_SIGNIN_BRIDGE" 2>/dev/null; wait "$OH_SIGNIN_BRIDGE" 2>/dev/null; exit 143' TERM INT HUP
+  wait "$OH_SIGNIN_BRIDGE" || rc=$?
+  case $rc in
+  0) oh_ok "signed in to Office" ;;
+  3) oh_say "the sign-in window was closed before the sign-in finished" ;;
+  *) oh_warn "the sign-in did not finish (omarchohard native signin to try again)" ;;
+  esac
+  exit "$rc"
+}
+
+oh_native_signin_end() {
+  # Word is closed the way a person closes it, so Office finishes saving the
+  # sign-in it has just taken; whatever is left is stopped after 20 s.
+  oh_native_wine taskkill /IM WINWORD.EXE >/dev/null 2>&1 || true
+  oh_native_box tmp
+  oh_dry || timeout 20 "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null || true
   oh_native_ws -k 2>/dev/null || true
-  oh_native_signin_stop
-  printf '%s remote sign-in stopped\n' "$(date -u +%FT%TZ)" >>"$log"
-  oh_say "remote sign-in: stopped after $minutes minute$( ((minutes == 1)) || echo s)"
+  oh_native_devtools off
+  oh_native_ws -k 2>/dev/null || true
+  oh_native_hidden_stop
+  rm -rf -- "$(oh_native_signin_dir)"
 }
 
 # The name the link uses for this device: its tailnet DNS name (MagicDNS),
@@ -1298,14 +1358,14 @@ oh_native_link_host() {
   OH_LINK_DEVICE=$(LC_ALL=C tr -cd 'A-Za-z0-9.-' <<<"$name")
 }
 
-# The sign-in. On this screen, Word opens. With --remote, Word opens on a
-# hidden screen shared as a web page on the tailnet address only, behind a
-# password new for each session, and the link is printed last, on a line of its own.
-# Never on a plain LAN: the page is plain HTTP and VNC, so the person's
-# Microsoft password would cross the network unencrypted. Tailscale's
-# WireGuard tunnel is what encrypts it.
+# The sign-in: Microsoft's own page in a real browser window on this screen,
+# so passkeys, security keys and password managers work. Office waits on a
+# hidden screen and takes the result. With --remote, the window is a page on
+# the tailnet address only, for a phone or another computer, behind a link
+# with a one-time session id. Never on a plain LAN: the page is plain HTTP,
+# and Tailscale's WireGuard tunnel is what encrypts it.
 oh_native_signin() {
-  local remote=0 minutes=30 port=$OH_NATIVE_PORT email='' ip engine tag dir pw url i bin
+  local remote=0 minutes=30 port=$OH_NATIVE_PORT email='' wait=0 ip='' dir bin sid url i
   while (($#)); do
     case $1 in
     --remote) remote=1 ;;
@@ -1313,94 +1373,78 @@ oh_native_signin() {
     --minutes) minutes=${2:?--minutes needs a number} && shift ;;
     --port) port=${2:?--port needs a number} && shift ;;
     --email) email=${2:?--email needs an address} && shift ;;
+    --wait) wait=1 ;;
     --stop)
-      oh_run systemctl --user stop "$OH_NATIVE_SIGNIN.service" >/dev/null 2>&1 || true
       oh_native_signin_stop
-      oh_ok "remote sign-in stopped"
+      oh_ok "sign-in stopped"
       return 0
       ;;
-    *) oh_die "usage: omarchohard native signin [--remote [--minutes N] [--port P]] [--email E] | --stop" ;;
+    *) oh_die "usage: omarchohard native signin [--remote [--minutes N] [--port P]] [--email E] [--wait] | --stop" ;;
     esac
     shift
   done
   [[ $minutes =~ ^[0-9]+$ ]] && ((minutes >= 1 && minutes <= 240)) || oh_die "--minutes takes 1 to 240"
   [[ $port =~ ^[0-9]+$ ]] && ((port >= 1024 && port <= 65535)) || oh_die "--port takes 1024 to 65535"
-  oh_native_ready || oh_die "native Office is not set up yet (omarchohard native install)"
-  if ((! remote)); then
-    oh_native_run word
-    oh_say "Sign in to Office in the Word window: Sign in, then ${email:-your account}."
-    return 0
+  # Checked here, not left to errexit: setup calls this inside $(...).
+  if ((remote)); then
+    ip=$(oh_native_bind_ip 0) || return 1
   fi
-
-  ip=$(oh_native_bind_ip 0)
-  engine=$(oh_native_engine) || oh_die "remote sign-in needs Docker or Podman for its hidden screen"
-  ! oh_native_signin_running || oh_die "a remote sign-in is already running; stop it with: omarchohard native signin --stop"
-  [[ -z $(oh_native_app_pids) ]] || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first; the sign-in starts Word on its own screen"
-  # A warm Wine server still has the person's screen; start from a clean one.
-  oh_native_stop_wine
-  tag=$(oh_native_image "$engine")
+  oh_native_signin_needs "$remote"
   dir=$(oh_native_signin_dir)
   bin=$(oh_bin_path)
-  if oh_dry; then
-    oh_run "$engine" run -d --rm --name "$OH_NATIVE_SIGNIN" -p "$ip:$port:6080" -v "$dir/xsock:/tmp/.X11-unix" -v "$dir/pw:/run/omarchohard" "$tag"
-    oh_run systemd-run --user --quiet --collect --unit="$OH_NATIVE_SIGNIN" "$bin" native signin-watch "$minutes" "unix:$dir/xsock/X0"
+  local -a run=("$bin" native signin-run "$minutes")
+  [[ -z $email ]] || run+=(--email "$email")
+  if ((remote)); then
     oh_native_link_host 0 "$ip"
-    printf 'Sign in here: http://%s:%s/#pw=<password>&device=%s\n' "$OH_LINK_HOST" "$port" "$OH_LINK_DEVICE"
+    run+=(--remote "$ip:$port" --device "$OH_LINK_DEVICE")
+  fi
+  if oh_dry; then
+    oh_run systemd-run --user --quiet --collect --unit="$OH_NATIVE_SIGNIN" "${run[@]}"
+    ((remote)) && printf 'Sign in here: http://%s:%s/#s=<session>\n' "$OH_LINK_HOST" "$port"
     return 0
   fi
   rm -rf -- "$dir"
   (
     umask 077
-    mkdir -p "$dir/xsock" "$dir/pw"
-    # VNC passwords are 8 characters: 62^8, about 2 x 10^14, for one session
-    # of at most four hours, reachable only from the tailnet or the LAN.
-    pw=$(LC_ALL=C tr -dc 'A-Za-z0-9' < <(head -c 512 /dev/urandom))
-    printf '%s\n' "${pw:0:8}" >"$dir/pw/pw"
+    mkdir -p -- "$dir"
+    # 192 bits, for one session of at most four hours on the tailnet.
+    od -An -tx1 -N24 /dev/urandom | tr -d ' \n' >"$dir/session"
   )
-  pw=$(head -n1 "$dir/pw/pw")
-  local -a run=("$engine" run -d --rm --name "$OH_NATIVE_SIGNIN" -u "$(id -u):$(id -g)")
-  [[ $engine != podman ]] || run+=(--userns=keep-id)
-  run+=(-p "$ip:$port:6080" -v "$dir/xsock:/tmp/.X11-unix" -v "$dir/pw:/run/omarchohard" "$tag")
-  "${run[@]}" >/dev/null || {
-    rm -rf -- "$dir"
-    oh_die "could not start the sign-in screen (is port $port on $ip free? try --port)"
-  }
-  for ((i = 0; i < 100; i++)); do
-    [[ -S $dir/xsock/X0 ]] && break
+  sid=$(cat -- "$dir/session")
+  ((remote)) || rm -f -- "$dir/session"
+  local -a unit_env=("${OH_UNIT_ENV[@]}") v
+  for v in WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP LANG; do
+    [[ -z ${!v:-} ]] || unit_env+=("--setenv=$v=${!v}")
+  done
+  if ! { oh_have systemd-run && systemd-run --user --quiet --collect --unit="$OH_NATIVE_SIGNIN" "${unit_env[@]}" "${run[@]}" 2>/dev/null; }; then
+    setsid -f "${run[@]}" </dev/null >/dev/null 2>&1 || {
+      oh_native_signin_stop
+      oh_die "could not start the sign-in"
+    }
+  fi
+  # The page answers about a second after start.
+  for ((i = 0; i < 300; i++)); do
+    [[ -e $dir/ready ]] && break
+    oh_native_signin_running || ((i < 20)) || break
     sleep 0.1
   done
-  if [[ ! -S $dir/xsock/X0 ]]; then
+  if [[ ! -e $dir/ready ]]; then
     oh_native_signin_stop
-    oh_die "the sign-in screen did not start ($engine logs $OH_NATIVE_SIGNIN)"
+    oh_die "the sign-in did not start (journalctl --user -u $OH_NATIVE_SIGNIN)"
   fi
-  # x11vnc deletes the password file once it has read it.
-  for ((i = 0; i < 50; i++)); do
-    [[ -e $dir/pw/pw ]] || break
-    sleep 0.1
-  done
-  rm -f -- "$dir/pw/pw"
-  if ! { oh_have systemd-run && systemd-run --user --quiet --collect --unit="$OH_NATIVE_SIGNIN" "${OH_UNIT_ENV[@]}" "$bin" native signin-watch "$minutes" "unix:$dir/xsock/X0" 2>/dev/null; }; then
-    setsid -f "$bin" native signin-watch "$minutes" "unix:$dir/xsock/X0" </dev/null >/dev/null 2>&1 ||
-      {
-        oh_native_signin_stop
-        oh_die "could not start Word for the sign-in"
-      }
+  if ((! remote)); then
+    oh_say "The sign-in window is open on this screen${email:+ for $email}."
+    if ((wait)); then
+      while oh_native_signin_running; do sleep 0.5; done
+    fi
+    return 0
   fi
-  # The password travels in the link's fragment (after #), which browsers
-  # never send to the server; the page takes it out of the address bar.
-  oh_native_link_host 0 "$ip"
-  url="http://$OH_LINK_HOST:$port/#pw=$pw&device=$OH_LINK_DEVICE"
-  # The link is printed only once the page answers (about 2 s after start).
-  for ((i = 0; i < 150; i++)); do
-    curl -fs -o /dev/null --max-time 1 "http://$ip:$port/" && break
-    sleep 0.1
-  done
-  ((i < 150)) || oh_warn "the sign-in page does not answer yet on $ip:$port ($engine logs $OH_NATIVE_SIGNIN)"
+  url="http://$OH_LINK_HOST:$port/#s=$sid"
   if oh_have notify-send; then
-    notify-send -a omarchohard -i omarchohard "Sign in to Office" "Open on another device on your network: $url" 2>/dev/null || true
+    notify-send -a omarchohard -i omarchohard "Sign in to Office" "Open on another device on your tailnet: $url" 2>/dev/null || true
   fi
-  oh_say "Word is starting on a hidden screen, shared only on $ip${email:+; sign in as $email}."
-  oh_say "Word starts again if it closes; the page stops after $minutes minute$( ((minutes == 1)) || echo s) (now: omarchohard native signin --stop)."
+  oh_say "Office is starting on a hidden screen; the sign-in page is shared only on $ip${email:+, for $email}."
+  oh_say "It stops once you are signed in or after $minutes minute$( ((minutes == 1)) || echo s) (now: omarchohard native signin --stop)."
   printf 'Sign in here: %s\n' "$url"
 }
 
@@ -1749,7 +1793,6 @@ oh_native_uninstall() {
     oh_ui_open
     oh_ui_confirm "Delete native Office ($OH_NATIVE_PREFIX, with its sign-in), the seed and Wine ($OH_WINE_DIR)?" no || oh_die "nothing was removed"
   fi
-  oh_run systemctl --user stop "$OH_NATIVE_SIGNIN.service" >/dev/null 2>&1 || true
   oh_native_signin_stop
   oh_native_serve_stop
   oh_native_prewarm off >/dev/null 2>&1 || true
@@ -1775,7 +1818,7 @@ oh_native() {
   install) oh_native_install "$@" ;;
   run) oh_native_run "$@" ;;
   signin) oh_native_signin "$@" ;;
-  signin-watch) oh_native_signin_watch "$@" ;;
+  signin-run) oh_native_signin_run "$@" ;;
   idle-watch) oh_native_idle_watch ;;
   seed) oh_native_seed "$@" ;;
   status) oh_native_status "$@" ;;
