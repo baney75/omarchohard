@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Sign in to Microsoft 365</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1b1b1b; --muted: #5f5f5f; --line: #d4d4d4; --field: #ffffff;
+  --accent: #0f6cbd; --accent-fg: #ffffff; --accent-hover: #115ea3; --soft: #f3f3f3;
+  --bad: #c50f1f; --good: #107c10;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1c1c; --fg: #f3f3f3; --muted: #ababab; --line: #3d3d3d; --field: #262626;
+    --accent: #479ef5; --accent-fg: #0a1a2b; --accent-hover: #62abf5; --soft: #2a2a2a;
+    --bad: #ff7b84; --good: #6ccb5f;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1c1c; --fg: #f3f3f3; --muted: #ababab; --line: #3d3d3d; --field: #262626;
+  --accent: #479ef5; --accent-fg: #0a1a2b; --accent-hover: #62abf5; --soft: #2a2a2a;
+  --bad: #ff7b84; --good: #6ccb5f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%;
+}
+main {
+  min-height: 100%; display: grid; justify-items: center; align-content: start;
+  padding: max(48px, 12vh, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+.card { width: 100%; max-width: 400px; }
+h1 { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+p { margin: 0; }
+.sub { color: var(--muted); }
+form { margin-top: 32px; display: grid; gap: 16px; }
+label { font-size: 14px; font-weight: 600; display: block; margin-bottom: 8px; }
+input[type=email] {
+  width: 100%; max-width: 100%; height: 48px; padding: 0 12px;
+  font: inherit; color: var(--fg); background: var(--field);
+  border: 1px solid var(--line); border-radius: 8px; outline: none;
+}
+input[type=email]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.btn {
+  height: 48px; width: 100%; border: 0; border-radius: 8px; cursor: pointer;
+  font: inherit; font-weight: 600; color: var(--accent-fg); background: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+}
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { cursor: default; opacity: .85; }
+.link { background: none; border: 0; padding: 8px 0; font: inherit; color: var(--accent); cursor: pointer; }
+.msg { color: var(--bad); font-size: 14px; min-height: 0; }
+.msg:empty { display: none; }
+.choices { margin-top: 32px; display: grid; gap: 12px; }
+.choice {
+  width: 100%; text-align: left; padding: 16px; border-radius: 8px; cursor: pointer;
+  font: inherit; color: var(--fg); background: var(--soft); border: 1px solid transparent;
+}
+.choice:hover { border-color: var(--accent); }
+.choice b { display: block; font-weight: 600; }
+.choice span { color: var(--muted); font-size: 14px; }
+.who { margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
+.center { text-align: center; }
+.spin {
+  width: 20px; height: 20px; border-radius: 50%; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent; animation: r .8s linear infinite;
+}
+.big { width: 32px; height: 32px; margin: 0 auto 24px; color: var(--accent); }
+.mark { width: 48px; height: 48px; margin: 0 auto 24px; display: block; }
+@keyframes r { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+[hidden] { display: none !important; }
+#screen { position: fixed; inset: 0; background: var(--bg); touch-action: none; }
+#view { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#kbd {
+  position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
+  font-size: 16px; resize: none; pointer-events: none; caret-color: transparent;
+}
+#loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); color: var(--muted); }
+#loading div { text-align: center; }
+</style>
+</head>
+<body>
+<main id="main">
+  <section class="card" id="s-email" hidden>
+    <h1>Sign in to Microsoft 365</h1>
+    <p class="sub" id="where">Office on this computer</p>
+    <form id="f">
+      <div>
+        <label for="email">Email</label>
+        <input id="email" type="email" name="username" autocomplete="username" inputmode="email"
+               autocapitalize="off" spellcheck="false" placeholder="you@example.com" required>
+      </div>
+      <p class="msg" id="msg" role="alert"></p>
+      <button class="btn" id="go" type="submit">Continue</button>
+    </form>
+  </section>
+
+  <section class="card" id="s-choose" hidden>
+    <h1>Which account is it?</h1>
+    <p class="who" id="who"></p>
+    <div class="choices">
+      <button class="choice" data-v="work" type="button"><b>Work or school</b><span>Given to you by an organization</span></button>
+      <button class="choice" data-v="personal" type="button"><b>Personal</b><span>Outlook.com, Hotmail or a Microsoft 365 Family plan</span></button>
+    </div>
+    <button class="link" id="other" type="button">Use another email</button>
+  </section>
+
+  <section class="card center" id="s-wait" hidden>
+    <div class="spin big"></div>
+    <h1 id="wait-title">Finishing in Office</h1>
+    <p class="sub">This takes a few seconds.</p>
+  </section>
+
+  <section class="card center" id="s-done" hidden>
+    <svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="none" stroke="var(--good)" stroke-width="3"/><path d="M14 25l7 7 13-15" fill="none" stroke="var(--good)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <h1>You're signed in</h1>
+    <p class="sub" id="done-sub">Office is ready. You can close this window.</p>
+  </section>
+
+  <section class="card center" id="s-error" hidden>
+    <svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="none" stroke="var(--bad)" stroke-width="3"/><path d="M24 13v14M24 34v1" fill="none" stroke="var(--bad)" stroke-width="3" stroke-linecap="round"/></svg>
+    <h1>Sign-in didn't finish</h1>
+    <p class="sub" id="err"></p>
+  </section>
+</main>
+
+<div id="screen" hidden>
+  <img id="view" alt="Microsoft sign-in" draggable="false">
+  <textarea id="kbd" autocomplete="off" autocapitalize="off" spellcheck="false" aria-hidden="true"></textarea>
+  <div id="loading"><div><div class="spin big"></div><p>Opening Microsoft sign-in</p></div></div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const sid = new URLSearchParams(location.hash.slice(1)).get("s") || "";
+history.replaceState(null, "", location.pathname);
+let state = {}, queue = Promise.resolve(), sentSize = "";
+
+function api(m) {
+  queue = queue.then(() => fetch("/api", {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Session": sid }, body: JSON.stringify(m)
+  }).then((r) => r.json()).catch(() => ({})));
+  return queue;
+}
+
+function show(id) {
+  for (const s of document.querySelectorAll("main > section")) s.hidden = s.id !== id;
+}
+
+function render(s) {
+  state = s;
+  const remote = s.mode === "remote";
+  $("where").textContent = remote ? "Office on " + s.device : "Office on this computer";
+  const onScreen = remote && s.step === "microsoft";
+  $("screen").hidden = !onScreen;
+  $("main").hidden = onScreen;
+  if (onScreen) { sendSize(); return; }
+  if (s.step === "email") {
+    show("s-email");
+    $("msg").textContent = s.message || "";
+    const e = $("email");
+    if (s.email && !e.value) e.value = s.email;
+    $("go").disabled = e.disabled = !!s.busy;
+    $("go").innerHTML = s.busy ? '<span class="spin"></span>Getting Office ready' : "Continue";
+    if (!s.busy) e.focus();
+  } else if (s.step === "choose") {
+    show("s-choose");
+    $("who").textContent = $("email").value;
+    for (const b of document.querySelectorAll(".choice")) b.disabled = !!s.busy;
+  } else if (s.step === "finishing") {
+    show("s-wait");
+  } else if (s.step === "done") {
+    show("s-done");
+    $("done-sub").textContent = remote
+      ? "Office is ready on " + s.device + ". You can close this page."
+      : "Office is ready. This window closes by itself.";
+  } else if (s.step === "error") {
+    show("s-error");
+    $("err").textContent = (s.message || "Something went wrong.") + " Run omarchohard native signin to try again.";
+  }
+}
+
+$("f").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const v = $("email").value.trim();
+  if (!v.includes("@")) { $("msg").textContent = "Enter the email you use with Microsoft."; return; }
+  render(Object.assign({}, state, { busy: true, message: "" }));
+  api({ t: "email", v });
+});
+for (const b of document.querySelectorAll(".choice")) {
+  b.addEventListener("click", () => { render(Object.assign({}, state, { busy: true })); api({ t: "choose", v: b.dataset.v }); });
+}
+$("other").addEventListener("click", () => { $("email").value = ""; api({ t: "email", v: "" }); });
+
+// The remote screen: Microsoft's page, laid out for this screen.
+const view = $("view"), kbd = $("kbd"), MARK = "​";
+function sendSize() {
+  const size = [innerWidth, innerHeight, Math.min(devicePixelRatio || 1, 2), matchMedia("(prefers-color-scheme: dark)").matches].join("x");
+  if (size === sentSize) return;
+  sentSize = size;
+  api({ t: "viewport", w: innerWidth, h: innerHeight, dpr: Math.min(devicePixelRatio || 1, 2),
+        dark: matchMedia("(prefers-color-scheme: dark)").matches });
+}
+addEventListener("resize", () => { if (!$("screen").hidden) sendSize(); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!$("screen").hidden) sendSize(); });
+
+function point(e) {
+  const r = view.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * innerWidth / r.width, y: (e.clientY - r.top) * innerHeight / r.height };
+}
+let down = null, moved = false, wheelY = 0, wheelAt = null;
+view.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; moved = false; });
+view.addEventListener("pointermove", (e) => {
+  if (!down || e.pointerType === "mouse") return;
+  const dy = down.y - e.clientY;
+  if (Math.abs(dy) > 8 || moved) {
+    moved = true; wheelY += dy; down = { x: e.clientX, y: e.clientY };
+    if (!wheelAt) wheelAt = requestAnimationFrame(() => { const p = point(e); api({ t: "wheel", x: p.x, y: p.y, dy: wheelY }); wheelY = 0; wheelAt = null; });
+  }
+});
+view.addEventListener("pointerup", (e) => {
+  if (!down) return;
+  down = null;
+  if (moved) return;
+  // Focus now, inside the tap, or a phone will not open its keyboard.
+  kbd.value = MARK; kbd.focus({ preventScroll: true }); kbd.setSelectionRange(1, 1);
+  const p = point(e);
+  api({ t: "tap", x: p.x, y: p.y }).then((r) => { if (!r.editable) kbd.blur(); });
+});
+view.addEventListener("wheel", (e) => { e.preventDefault(); const p = point(e); api({ t: "wheel", x: p.x, y: p.y, dy: e.deltaY }); }, { passive: false });
+
+let composing = false;
+kbd.addEventListener("compositionstart", () => { composing = true; });
+kbd.addEventListener("compositionend", () => { composing = false; flush(); });
+kbd.addEventListener("input", () => { if (!composing) flush(); });
+function flush() {
+  const v = kbd.value;
+  if (v === MARK) return;
+  if (!v.startsWith(MARK)) {
+    api({ t: "key", k: "Backspace" });
+  } else {
+    v.slice(MARK.length).split("\n").forEach((part, i, all) => {
+      if (part) api({ t: "text", s: part });
+      if (i < all.length - 1) api({ t: "key", k: "Enter" });
+    });
+  }
+  kbd.value = MARK; kbd.setSelectionRange(1, 1);
+}
+kbd.addEventListener("keydown", (e) => {
+  if (e.isComposing) return;
+  if (e.key === "Backspace" && kbd.value !== MARK) return;
+  if (["Enter", "Tab", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "Escape"].includes(e.key)) {
+    e.preventDefault(); api({ t: "key", k: e.key });
+  }
+});
+
+if (!sid) {
+  render({ step: "error", message: "This link is missing its session." });
+} else {
+  const es = new EventSource("/events?s=" + encodeURIComponent(sid));
+  es.addEventListener("state", (e) => render(JSON.parse(e.data)));
+  es.addEventListener("frame", (e) => {
+    const f = JSON.parse(e.data);
+    view.src = "data:image/jpeg;base64," + f.img;
+    $("loading").hidden = true;
+  });
+  es.onerror = () => {
+    if (state.step === "done" || state.step === "error") { es.close(); return; }
+    if (es.readyState === EventSource.CLOSED) render({ step: "error", mode: state.mode, message: "The sign-in on this computer stopped." });
+  };
+}
+</script>
+</body>
+</html>
