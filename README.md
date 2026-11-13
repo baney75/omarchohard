@@ -380,7 +380,7 @@ is extracted), installs Office into a Wine prefix in
 omarchohard native check                                   # x86_64, Hyprland, 8 GB of memory, 8 GB free disk
 omarchohard setup --tier native --plan school              # the first device: Office from Microsoft
 omarchohard setup --tier native --yes --from ssh:laptop    # every other device: a copy of the first
-omarchohard native signin --remote                         # sign in from another device, through a one-time link
+omarchohard native signin --remote                         # sign in from another device, through a sign-in link
 omarchohard native status                                  # --json for scripts
 omarchohard native uninstall
 ```
@@ -436,15 +436,55 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   Word opens on a hidden screen, and a page on this device's Tailscale name
   (Tailscale only, as it encrypts the password typed through it) shows
   only Office's sign-in window, at its real size or smaller, in light or
-  dark mode. The link carries a one-time password after `#`, which browsers
+  dark mode. The link carries a password, new for each session and good until it ends, after `#`, which browsers
   never send to the server, and the page takes it out of the address bar.
   It is printed as `Sign in here: http://laptop.example.ts.net:6080/#pw=...`
-  and sent as a notification. It stops when Word closes or after 30
-  minutes. Office has no
+  and sent as a notification. If Word closes partway through, it starts
+  again on the same page; the page stops after 30 minutes or with
+  `omarchohard native signin --stop`. After an abrupt exit Word may ask to
+  load the Normal template it saved; that is expected. Office has no
   documented setting that fills in the sign-in address, so `--email` only
   names the account in setup's messages.
-- **Updates.** Office does not update itself in this tier; a newer Office
-  comes from a new fresh install and its seed.
+- **Updates.** Office's own updater does not run under Wine, so
+  omarchohard updates it. `omarchohard native update --check` compares the
+  installed version with Microsoft's Current channel (0.3 s);
+  `omarchohard native update` downloads the newer one and runs the Office
+  Deployment Tool again, which updates Office in place. A weekly user timer
+  does the same, with a random delay of up to 6 hours, only on AC power,
+  and never while an Office app or the remote sign-in is open (it tries
+  again every 6 hours while an update waits). The seed keeps its version,
+  since a signed-in Office is never packed; `native status` says when the
+  seed is older than Office, and a device installed from it updates itself
+  within the hour. `native status` shows the installed and latest versions
+  and the last result.
+- **Sandbox (experimental, off by default).** Native Office runs as plain
+  Wine and opens files where they are. `OMARCHOHARD_NATIVE_SANDBOX=1` runs
+  each Office app, and the Wine server that opens files for it, under
+  bubblewrap: the system read-only, your home folder hidden from its file
+  views, and only the prefix, Documents, Downloads, Desktop, Pictures and
+  OneDrive writable. It is not a security boundary yet: it shares the
+  host's processes (`/proc`), so code inside can still reach your home
+  through another process. With it on, a file from anywhere else (your home
+  folder itself, `/tmp`, a USB drive) opens as a copy, and omarchohard says
+  so, with a desktop notification when no terminal is open; save it into
+  one of those folders to keep your changes. Office gets its own `/tmp`
+  (`~/.local/state/omarchohard/native/tmp`, mode 700), sound and the
+  display, and keeps the network. Warm starts inside it measured 0.8 s and
+  2.4 s. The prefix is mode 700 and the seed 600 either way.
+- **OneDrive** is drive O: in Office when `onedrive_dir` exists.
+- **Mail.** With native Office preferred and mail on, `mailto:` links open
+  a new message in Outlook (`/c ipm.note /m`), or the web app when Outlook
+  is not installed.
+- **Prewarm.** `omarchohard native prewarm on` keeps Wine's server and
+  services running from login (about 230 MB). Word's first start then
+  measured a median 4.3 s against 5.0 s cold (3 runs each), so it is off
+  unless you turn it on.
+- **Macros.** omarchohard sets no macro policy: learn.microsoft.com
+  documents no registry value for one that this could cite. Office's
+  defaults apply. Its block on macros from the internet
+  ([Microsoft](https://learn.microsoft.com/en-us/microsoft-365-apps/security/internet-macros-blocked))
+  depends on the Mark of the Web, which files saved on Linux do not carry,
+  so open files with macros only from people you trust.
 - **Organizations.** A school or employer can require a managed Windows
   device for its accounts. Office then shows error AADSTS53000, 53001 or
   53003; use the web apps or ask IT

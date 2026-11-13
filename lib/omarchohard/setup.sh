@@ -307,7 +307,7 @@ oh_setup() {
   OH_CFG_LOADED=0 && oh_config_load
   local pause=0 line bin='' label choice email mail_flag=() iso_flag=() od='' answer tier='' desktop_failed=0
   local want_bin='' want_profile='' want_email='' want_mail='' want_prewarm='' want_apps='' want_files='' optimize=0
-  local from='' sha='' plan='' shared=0 remote_signin=0 json=0 native_failed=0 signin_url='' signin_note=''
+  local from='' sha='' plan='' shared=0 remote_signin=0 json=0 native_failed=0 signin_url='' signin_note='' native_prewarm=0
   local -a browsers labels native_args=()
   OH_SETUP_START=$SECONDS OH_SETUP_JSON_DONE=0
   # --json: everything for people goes to stderr, and stdout gets one JSON
@@ -535,6 +535,13 @@ oh_setup() {
     fi
   fi
 
+  # Native Office's prewarm is its own: the Wine server, not the browser.
+  if [[ $tier == native ]]; then
+    case $want_prewarm in
+    on) native_prewarm=1 ;;
+    off) oh_native_prewarm off >/dev/null 2>&1 || true ;;
+    esac
+  fi
   if [[ ${iso_flag[*]} == --isolated ]]; then
     case $want_prewarm in
     on) oh_prewarm on ;;
@@ -561,6 +568,7 @@ oh_setup() {
     oh_ui_step "Native Office (under a minute from a seed, about 6 minutes from Microsoft)"
     if (oh_native_install "${native_args[@]}"); then
       oh_dry || : >"$OH_NATIVE_DONE"
+      ((native_prewarm == 0)) || oh_native_prewarm on || oh_warn "native prewarm did not start"
     else
       native_failed=1
     fi

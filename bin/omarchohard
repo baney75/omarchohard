@@ -63,6 +63,9 @@ Native Office (Microsoft's desktop apps on Linux under Wine, no VM)
                          Sign in on this screen, or through a one-time link
   native seed --stdout | --path | serve [--minutes N] [--port P] [--lan] | serve --stop
                          Hand the pre-sign-in seed to your other devices
+  native update [--check]  Update Office to the Current channel (a weekly timer does it too)
+  native prewarm on|off|status
+                         Keep Wine running from login, for faster first starts
   native uninstall [--yes]
 
 Desktop Office (the real Windows apps, in a Windows VM you never see)

@@ -15,6 +15,19 @@ setup() {
   PREFIX=$NATIVE/prefix
   OFFICE="$PREFIX/drive_c/Program Files/Microsoft Office/root/Office16"
   SEEDNAME=seed-O365ProPlusRetail-16.0.20527.20196.tar.zst
+  # bubblewrap that logs its arguments and runs the command after `--`.
+  # shellcheck disable=SC2016 # expanded by the stub
+  stub bwrap 'printf "%s\n" "$*" >>"$HOME/bwrap.log"
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"'
+}
+
+# The sandbox is opt-in.
+sandbox_on() { export OMARCHOHARD_NATIVE_SANDBOX=1; }
+
+teardown() {
+  [ -z "${FAKE_APP:-}" ] || kill "$FAKE_APP" 2>/dev/null || true
 }
 
 # A wine-altars tree whose wine and wineserver only log their arguments.
@@ -339,7 +352,7 @@ while True:
   [ ! -e "$HOME/systemd-run.log" ]
 }
 
-@test "remote sign-in binds only the tailnet address, and the link carries a one-time password no command line shows" {
+@test "remote sign-in binds only the tailnet address, and the link carries a session password no command line shows" {
   fake_installed
   docker_signin
   # shellcheck disable=SC2016
@@ -467,16 +480,16 @@ esac'
 
 @test "native run opens files as Wine paths and keeps Wine warm" {
   fake_installed
-  mkdir -p "$HOME/My Docs"
-  cp "$FIXTURES/test.docx" "$HOME/My Docs/Report.docx"
-  DISPLAY=:9 run "$OH" native run word "$HOME/My Docs/Report.docx"
+  mkdir -p "$HOME/Documents/My Docs"
+  cp "$FIXTURES/test.docx" "$HOME/Documents/My Docs/Report.docx"
+  DISPLAY=:9 run "$OH" native run word "$HOME/Documents/My Docs/Report.docx"
   [ "$status" -eq 0 ]
   for _ in $(seq 50); do
     [ -s "$HOME/wine.log" ] && break
     sleep 0.1
   done
   home=$(readlink -f "$HOME")
-  winpath="Z:${home//\//\\}\\My Docs\\Report.docx"
+  winpath="Z:${home//\//\\}\\Documents\\My Docs\\Report.docx"
   grep -qF "Office16/WINWORD.EXE $winpath" "$HOME/wine.log"
   grep -qx -- '-p600' "$HOME/wineserver.log"
   grep -qx 'idle-watch' "$HOME/systemd-run.log"
@@ -576,4 +589,339 @@ esac'
   [ ! -e "$NATIVE" ]
   [ ! -e "$WINE" ]
   grep -qx 'open_with=web' "$XDG_CONFIG_HOME/omarchohard/config"
+}
+
+# The bwrap line that started EXE.
+box_line() { grep -F -- "$1" "$HOME/bwrap.log" | tail -n1; }
+
+@test "with the sandbox on, Office runs in it: home hidden, only its folders writable, /tmp its own, processes shared" {
+  sandbox_on
+  fake_installed
+  mkdir -p "$HOME/Documents" "$HOME/Elsewhere" "$HOME/OneDrive stand-in" "$HOME/.ssh" "$PREFIX/dosdevices"
+  cp "$FIXTURES/test.docx" "$HOME/Documents/Report.docx"
+  printf 'onedrive_dir=%s\n' "$HOME/OneDrive stand-in" >>"$XDG_CONFIG_HOME/omarchohard/config"
+  DISPLAY=:9 run "$OH" native run word "$HOME/Documents/Report.docx"
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/wine.log" ] && break
+    sleep 0.1
+  done
+  grep -qxF "$HOME/Documents/Report.docx" <(sed -n 's/^.*WINWORD.EXE Z://p' "$HOME/wine.log" | tr '\134' /)
+  [[ $output != *"opens a copy"* ]]
+  line=$(box_line WINWORD.EXE)
+  tmp=$XDG_STATE_HOME/omarchohard/native/tmp
+  [[ $line == "--ro-bind / / --dev-bind /dev /dev "* ]]
+  [[ $line == *" --tmpfs $HOME "* ]]
+  [[ $line == *" --tmpfs $XDG_RUNTIME_DIR "* ]] || [[ $XDG_RUNTIME_DIR != /run/user/* ]]
+  [[ $line == *" --bind $tmp /tmp "* ]]
+  [[ $line == *" --ro-bind $WINE $WINE "* ]]
+  [[ $line == *" --bind $PREFIX $PREFIX "* ]]
+  [[ $line == *" --bind $HOME/Documents $HOME/Documents "* ]]
+  [[ $line == *" --bind $HOME/OneDrive stand-in $HOME/OneDrive stand-in "* ]]
+  [[ $line == *" --setenv OH_NATIVE_BOX app --unshare-ipc --die-with-parent --new-session -- env "* ]]
+  [[ $line != *"--unshare-pid"* && $line != *"--unshare-all"* && $line != *"--unshare-net"* ]]
+  [[ $line != *"--bind $HOME $HOME"* && $line != *"$HOME/.ssh"* ]]
+  [ "$(stat -c %a "$tmp")" = 700 ]
+  # The Wine server opens files for the apps, so it runs in the same
+  # sandbox (and /tmp, where every app finds its socket), and outlives the
+  # command that starts it.
+  server=$(box_line -p600)
+  [ "${server%% --setenv*}" = "${line%% --setenv*}" ]
+  [[ $server == *" --tmpfs $HOME "* && $server == *" --bind $tmp /tmp "* ]]
+  [[ $server == *" --setenv OH_NATIVE_BOX app --unshare-ipc --new-session -- env WINEPREFIX=$PREFIX "* ]]
+  [[ $server != *"--dev-bind / /"* && $server != *"--die-with-parent"* ]]
+  # OneDrive is drive O:.
+  [ "$(readlink "$PREFIX/dosdevices/o:")" = "$HOME/OneDrive stand-in" ]
+  # A file outside Office's folders, in the home folder itself or in /tmp,
+  # opens as a copy in Office's own /tmp: its folder is never bound, since
+  # that could be the whole home or the shared /tmp.
+  for f in "$HOME/notes.docx" "$HOME/Elsewhere/Report.docx" "$BATS_TEST_TMPDIR/Invoice.docx"; do
+    cp "$FIXTURES/test.docx" "$f"
+    rm -f "$HOME/bwrap.log" "$HOME/wine.log"
+    DISPLAY=:9 run "$OH" native run word "$f"
+    [ "$status" -eq 0 ]
+    [[ $output == *"${f##*/} is outside the folders Office can reach"*"opens a copy"* ]]
+    for _ in $(seq 50); do
+      [ -s "$HOME/wine.log" ] && break
+      sleep 0.1
+    done
+    sed -n 's/^.*WINWORD.EXE Z://p' "$HOME/wine.log" | tr '\134' / | grep -qxE "/tmp/opened/[A-Za-z0-9]{6}/${f##*/}"
+    cmp "$f" "$(find "$tmp/opened" -name "${f##*/}" | tail -n1)"
+    line=$(box_line WINWORD.EXE)
+    [[ $line != *"--bind $HOME $HOME"* && $line != *"--bind ${f%/*} "* && $line != *"--bind /tmp /tmp"* ]]
+  done
+  # Without OneDrive, no O:; with the sandbox off, no bwrap.
+  printf 'onedrive_dir=%s\n' "$HOME/none" >>"$XDG_CONFIG_HOME/omarchohard/config"
+  rm "$HOME/bwrap.log" "$HOME/wine.log"
+  OMARCHOHARD_NATIVE_SANDBOX=0 DISPLAY=:9 run "$OH" native run word
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/wine.log" ] && break
+    sleep 0.1
+  done
+  [ ! -e "$PREFIX/dosdevices/o:" ]
+  [ ! -e "$HOME/bwrap.log" ]
+}
+
+@test "by default Office runs as plain Wine, with no bwrap, and opens a file anywhere in place" {
+  fake_installed
+  # shellcheck disable=SC2016
+  stub notify-send 'printf "%s\n" "$*" >>"$HOME/notify.log"'
+  cp "$FIXTURES/test.docx" "$HOME/notes.docx"
+  DISPLAY=:9 run "$OH" native run word "$HOME/notes.docx"
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/wine.log" ] && break
+    sleep 0.1
+  done
+  home=$(readlink -f "$HOME")
+  grep -qF "Office16/WINWORD.EXE Z:${home//\//\\}\\notes.docx" "$HOME/wine.log"
+  grep -qx -- '-p600' "$HOME/wineserver.log"
+  [[ $output != *"opens a copy"* ]]
+  [ ! -e "$HOME/bwrap.log" ]
+  [ ! -e "$HOME/notify.log" ]
+  [ ! -e "$XDG_STATE_HOME/omarchohard/native/tmp/opened" ]
+}
+
+@test "with the sandbox on, a copy opened with no terminal (a file manager) is also a desktop notification" {
+  sandbox_on
+  fake_installed
+  # shellcheck disable=SC2016
+  stub notify-send 'printf "%s\n" "$*" >>"$HOME/notify.log"'
+  mkdir -p "$HOME/Documents"
+  cp "$FIXTURES/test.docx" "$HOME/Documents/Report.docx"
+  DISPLAY=:9 run "$OH" native run word "$HOME/Documents/Report.docx"
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/notify.log" ]
+  cp "$FIXTURES/test.docx" "$HOME/notes.docx"
+  DISPLAY=:9 run "$OH" native run word "$HOME/notes.docx" </dev/null
+  [ "$status" -eq 0 ]
+  [[ $output == *"opens a copy"* ]]
+  grep -qF -- '-a omarchohard -u critical Office opened a copy of notes.docx notes.docx is outside Documents' "$HOME/notify.log"
+  grep -qF 'Save it into one of them to keep your changes.' "$HOME/notify.log"
+}
+
+@test "the prefix is 700, the seed and its SHA256 600, and install turns on the weekly update timer" {
+  fake_wine
+  make_seed "$BATS_TEST_TMPDIR/in/$SEEDNAME"
+  run "$OH" native install --from "$BATS_TEST_TMPDIR/in/$SEEDNAME" --yes
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %a "$PREFIX")" = 700 ]
+  [ "$(stat -c %a "$NATIVE/$SEEDNAME")" = 600 ]
+  [ "$(stat -c %a "$NATIVE/$SEEDNAME.sha256")" = 600 ]
+  units=$XDG_CONFIG_HOME/systemd/user
+  grep -qx 'ConditionACPower=true' "$units/omarchohard-native-update.service"
+  grep -qE '^ExecStart=".*/omarchohard" native update --auto$' "$units/omarchohard-native-update.service"
+  grep -qx 'OnCalendar=weekly' "$units/omarchohard-native-update.timer"
+  grep -qx 'RandomizedDelaySec=6h' "$units/omarchohard-native-update.timer"
+  grep -qx 'Persistent=true' "$units/omarchohard-native-update.timer"
+  grep -qx -- '--user enable --now omarchohard-native-update.timer' "$HOME/systemctl.log"
+  run "$OH" native status --json
+  [ "$(jq -r .update.timer <<<"$output")" = true ]
+  run "$OH" native uninstall --yes
+  [ "$status" -eq 0 ]
+  [ ! -e "$units/omarchohard-native-update.timer" ]
+  [ ! -e "$units/omarchohard-native-update.service" ]
+  grep -qx -- '--user disable --now omarchohard-native-update.timer' "$HOME/systemctl.log"
+}
+
+@test "prewarm on writes a login unit that keeps Wine warm, prewarm-run starts it, and off removes it" {
+  sandbox_on
+  run "$OH" native prewarm on
+  [ "$status" -eq 1 ]
+  [[ $output == *"not set up yet"* ]]
+  fake_installed
+  run "$OH" native prewarm on
+  [ "$status" -eq 0 ]
+  unit=$XDG_CONFIG_HOME/systemd/user/omarchohard-native-prewarm.service
+  grep -qE '^ExecStart=".*/omarchohard" native prewarm-run$' "$unit"
+  grep -qx 'WantedBy=graphical-session.target' "$unit"
+  # Stopping the unit must not take open Office apps with it.
+  grep -qx 'KillMode=process' "$unit"
+  grep -qx -- '--user enable --now omarchohard-native-prewarm.service' "$HOME/systemctl.log"
+  run "$OH" native prewarm-run
+  [ "$status" -eq 0 ]
+  grep -qx 'cmd.exe /c exit' "$HOME/wine.log"
+  [ "$(head -n1 "$HOME/wineserver.log")" = -p ]
+  [ "$(tail -n1 "$HOME/wineserver.log")" = -w ]
+  # The persistent server starts in the apps' sandbox.
+  [[ $(box_line ' -p') == *" --tmpfs $HOME "*" --setenv OH_NATIVE_BOX app --unshare-ipc --new-session -- env WINEPREFIX=$PREFIX "* ]]
+  run "$OH" native prewarm off
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- -k "$HOME/wineserver.log")" -eq 0 ]
+  [ ! -e "$unit" ]
+  grep -qx -- '--user disable --now omarchohard-native-prewarm.service' "$HOME/systemctl.log"
+}
+
+@test "with open_with=native and mail on, mailto links open a new message in Outlook; with mail=0 the web app" {
+  fake_installed
+  : >"$OFFICE/OUTLOOK.EXE"
+  printf 'open_with=native\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  DISPLAY=:9 run "$OH" open 'mailto:ada@example.com?subject=Hi'
+  [ "$status" -eq 0 ]
+  for _ in $(seq 50); do
+    [ -s "$HOME/wine.log" ] && break
+    sleep 0.1
+  done
+  grep -qxF 'C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE /c ipm.note /m ada@example.com?subject=Hi' "$HOME/wine.log" ||
+    grep -qF 'Office16/OUTLOOK.EXE /c ipm.note /m ada@example.com?subject=Hi' "$HOME/wine.log"
+  [ ! -e "$HOME/chromium.log" ]
+  printf 'mail=0\n' >>"$XDG_CONFIG_HOME/omarchohard/config"
+  rm "$HOME/wine.log"
+  DISPLAY=:9 run "$OH" open 'mailto:ada@example.com'
+  [ "$status" -eq 0 ]
+  grep -qF 'https://outlook.office.com/mail/deeplink/compose?to=ada@example.com' "$HOME/chromium.log"
+  [ ! -e "$HOME/wine.log" ]
+}
+
+@test "the remote sign-in starts Word again when it closes, logs each exit, and ends with its screen" {
+  fake_installed
+  # shellcheck disable=SC2016
+  stub docker 'printf "%s\n" "$*" >>"$HOME/docker.log"; exit 0'
+  sock=$XDG_RUNTIME_DIR/omarchohard-signin/xsock/X0
+  mkdir -p "${sock%/*}"
+  python3 -c "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" "$sock"
+  # Word exits at once; the third time, the screen goes too (signin --stop).
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$HOME/wine.log"\n[ "$(wc -l <"$HOME/wine.log")" -ge 3 ] && rm -f "%s"\nexit 1\n' "$sock" >"$WINE/bin/wine"
+  run "$OH" native signin-watch 5 "unix:$sock"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'WINWORD.EXE' "$HOME/wine.log")" -eq 3 ]
+  log=$XDG_STATE_HOME/omarchohard/native/signin.log
+  [ "$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z Word exited \(code 1\); starting it again$' "$log")" -eq 2 ]
+  grep -qE 'remote sign-in started for 5 minutes$' "$log"
+  grep -qE 'remote sign-in stopped$' "$log"
+  grep -qx 'rm -f omarchohard-native-signin' "$HOME/docker.log"
+  [ ! -e "$XDG_RUNTIME_DIR/omarchohard-signin" ]
+}
+
+# Office's Current channel at VERSION, and an ODT whose /configure moves the
+# prefix to the version in its configuration.xml.
+cdn_and_odt() {
+  office_cdn "$1"
+  mv "$STUBS/curl" "$STUBS/curl-cdn"
+  # shellcheck disable=SC2016
+  stub curl 'for a; do url=$a; done
+case $url in
+https://officecdn.microsoft.com/pr/wsus/setup.exe)
+  printf "%s\n" "$*" >>"$HOME/odt.log"
+  while [ $# -gt 0 ]; do [ "$1" = -o ] && { : >"$2"; break; }; shift; done ;;
+*) exec curl-cdn "$@" ;;
+esac'
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$HOME/wine.log"\ncase "$*" in *"/configure "*)\n  v=$(sed -n "s/.* Version=\\"\\([0-9.]*\\)\\".*/\\1/p" "%s/dl/configuration.xml")\n  sed -i "s/\\"VersionToReport\\"=\\"[0-9.]*\\"/\\"VersionToReport\\"=\\"$v\\"/" "%s/system.reg" ;;\nesac\n' "$NATIVE" "$PREFIX" >"$WINE/bin/wine"
+}
+
+@test "native update --check compares with the Current channel and changes nothing" {
+  fake_installed
+  printf 'kept\n' >"$NATIVE/$SEEDNAME"
+  office_cdn 16.0.20527.20196
+  run "$OH" native update --check
+  [ "$status" -eq 0 ]
+  [[ $output == *"Office 16.0.20527.20196 is current"* ]]
+  office_cdn 16.0.20600.20010
+  run "$OH" native update --check
+  [ "$status" -eq 0 ]
+  [[ $output == *"Office 16.0.20600.20010 is out; this device has 16.0.20527.20196"* ]]
+  [ ! -e "$NATIVE/office-src" ]
+  [ ! -e "$HOME/wine.log" ]
+  run "$OH" native status --json
+  [ "$(jq -r .update.installed <<<"$output")" = 16.0.20527.20196 ]
+  [ "$(jq -r .update.latest <<<"$output")" = 16.0.20600.20010 ]
+  [ "$(jq -r .update.available <<<"$output")" = true ]
+  [ "$(jq -r .seed.older_than_office <<<"$output")" = false ]
+  run "$OH" native status
+  [[ $output == *"update available: Office 16.0.20600.20010 (omarchohard native update)"* ]]
+}
+
+@test "native update installs the newer Office in place, keeps the seed, and says the seed is older" {
+  fake_installed
+  printf 'pre-sign-in seed\n' >"$NATIVE/$SEEDNAME"
+  cp "$NATIVE/$SEEDNAME" "$BATS_TEST_TMPDIR/seed.before"
+  cdn_and_odt 16.0.20600.20010
+  run "$OH" native update
+  [ "$status" -eq 0 ]
+  [[ $output == *"Office updated to 16.0.20600.20010"* ]]
+  grep -qF 'Version="16.0.20600.20010"' "$NATIVE/dl/configuration.xml"
+  grep -qF '<Product ID="O365ProPlusRetail">' "$NATIVE/dl/configuration.xml"
+  grep -qF 'setup.exe /configure Z:' "$HOME/wine.log"
+  grep -qF '"VersionToReport"="16.0.20600.20010"' "$PREFIX/system.reg"
+  # The seed is the same file; the live prefix was never packed.
+  cmp "$NATIVE/$SEEDNAME" "$BATS_TEST_TMPDIR/seed.before"
+  [ "$(find "$NATIVE" -maxdepth 1 -name 'seed-*.tar.zst' | wc -l)" -eq 1 ]
+  [ ! -e "$NATIVE/office-src" ]
+  run "$OH" native status --json
+  [ "$(jq -r .update.installed <<<"$output")" = 16.0.20600.20010 ]
+  [ "$(jq -r .update.result <<<"$output")" = "updated to 16.0.20600.20010" ]
+  [ "$(jq -r .seed.version <<<"$output")" = 16.0.20527.20196 ]
+  [ "$(jq -r .seed.older_than_office <<<"$output")" = true ]
+}
+
+@test "native update waits while an Office app is open, and the timer's run asks Microsoft at most once in 6 days" {
+  fake_installed
+  office_cdn 16.0.20600.20010
+  # A process that looks like this prefix's Word.
+  WINEPREFIX=$PREFIX sh -c 'sleep 60; :' "$OFFICE/WINWORD.EXE" &
+  FAKE_APP=$!
+  sleep 0.3
+  run "$OH" native update
+  [ "$status" -eq 1 ]
+  [[ $output == *"close Word, Excel, PowerPoint, Outlook and OneNote first"* ]]
+  run "$OH" native update --auto
+  [ "$status" -eq 0 ]
+  run "$OH" native status --json
+  [ "$(jq -r .update.result <<<"$output")" = "skipped: Office was open (16.0.20600.20010 is waiting)" ]
+  run grep -qs configure "$HOME/wine.log"
+  [ "$status" -ne 0 ]
+  kill "$FAKE_APP"
+  FAKE_APP=''
+  # Current, and checked today: the timer's run does not ask again.
+  office_cdn 16.0.20527.20196
+  run "$OH" native update --check
+  rm -f "$HOME/curl.log"
+  run "$OH" native update --auto
+  [ "$status" -eq 0 ]
+  [[ $output == *"next check 6 days after that"* ]]
+  [ ! -e "$HOME/curl.log" ]
+}
+
+# A process that looks like this prefix's Wine server (pgrep -x wineserver).
+fake_server() {
+  mkdir -p "$BATS_TEST_TMPDIR/fake"
+  printf '#!/bin/sh\nwhile :; do sleep 0.2; done\n' >"$BATS_TEST_TMPDIR/fake/wineserver"
+  chmod +x "$BATS_TEST_TMPDIR/fake/wineserver"
+  WINEPREFIX=$PREFIX "$BATS_TEST_TMPDIR/fake/wineserver" &
+  FAKE_APP=$!
+  printf '%s\n' "$FAKE_APP" >"$HOME/server.pid"
+  sleep 0.3
+}
+
+@test "native update stops a Wine server left running (and prewarm) first, and waits when it will not stop" {
+  fake_installed
+  cdn_and_odt 16.0.20600.20010
+  fake_server
+  # A server -k cannot reach: no update runs under it.
+  run "$OH" native update
+  [ "$status" -eq 1 ]
+  [[ $output == *"Office's Wine server (pid $FAKE_APP) did not stop"* ]]
+  run grep -qs configure "$HOME/wine.log"
+  [ "$status" -ne 0 ]
+  run "$OH" native update --auto
+  [ "$status" -eq 0 ]
+  run "$OH" native status --json
+  [ "$(jq -r .update.result <<<"$output")" = "skipped: Office's Wine server was running (16.0.20600.20010 is waiting)" ]
+  run grep -qs configure "$HOME/wine.log"
+  [ "$status" -ne 0 ]
+  # One -k stops, with prewarm on: prewarm stops first and starts again after.
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$HOME/wineserver.log"\n[ "$1" = -k ] && kill "$(cat "$HOME/server.pid")" 2>/dev/null\nexit 0\n' >"$WINE/bin/wineserver"
+  # shellcheck disable=SC2016
+  stub systemctl 'printf "%s\n" "$*" >>"$HOME/systemctl.log"; exit 0'
+  rm -f "$HOME/wineserver.log" "$HOME/systemctl.log"
+  run "$OH" native update
+  [ "$status" -eq 0 ]
+  [[ $output == *"Office updated to 16.0.20600.20010"* ]]
+  [ "$(head -n1 "$HOME/wineserver.log")" = -k ]
+  grep -qF 'setup.exe /configure Z:' "$HOME/wine.log"
+  [ "$(grep -n -- '--user stop omarchohard-native-prewarm.service' "$HOME/systemctl.log" | cut -d: -f1)" -lt "$(grep -n -- '--user start omarchohard-native-prewarm.service' "$HOME/systemctl.log" | cut -d: -f1)" ]
 }

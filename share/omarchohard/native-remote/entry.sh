@@ -1,6 +1,6 @@
 #!/bin/sh
 # Xvfb on :0 with no window manager, x11vnc on it for this container only,
-# and the sign-in page on port 6080. The one-time password is read from
+# and the sign-in page on port 6080. The session's password is read from
 # /run/omarchohard/pw, which x11vnc deletes once it has read it (rm:), so it
 # is never on a command line.
 set -eu

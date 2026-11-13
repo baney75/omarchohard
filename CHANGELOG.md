@@ -23,10 +23,29 @@ builds are not listed; they carry the version of the next release plus a
   turns on shared computer activation for school and enterprise plans.
 - `omarchohard native signin --remote` shows only Office's sign-in window,
   as a page on the device's Tailscale name only (never a plain LAN) that
-  fits a phone, in light or dark mode, behind a one-time password carried
+  fits a phone, in light or dark mode, behind a random password, new for each session and good until it ends, carried
   after `#` in the link, and prints the link last as `Sign in here: ...`.
 - Native Office maps Segoe UI to Selawik, Microsoft's open-source stand-in
   (SIL OFL 1.1, shipped with omarchohard), so Office's text looks as meant.
+- `omarchohard native update [--check]` updates native Office to the
+  Current channel in place with the Office Deployment Tool, and a weekly
+  user timer does it on AC power while no Office app is open. `--check`
+  took 0.3 s. `native status` shows the installed and latest versions, the
+  last result, and whether the seed is older than Office.
+- An experimental, opt-in sandbox (`OMARCHOHARD_NATIVE_SANDBOX=1`) runs
+  native Office and its Wine server under bubblewrap: home hidden from its
+  file views, only the prefix, the usual document folders and OneDrive
+  writable, and its own `/tmp`; a file from anywhere else opens as a copy.
+  It does not yet isolate processes (`/proc`), so it is not a security
+  boundary, and it is off by default. OneDrive is drive O:. The prefix is
+  mode 700 and the seed 600.
+- `native update` stops a Wine server left from Office's last use (and
+  prewarm, which it starts again after) before it runs, and waits when one
+  will not stop.
+- `omarchohard native prewarm on|off` keeps Wine running from login, and
+  `mailto:` links open in native Outlook when it is preferred.
+- `native signin --remote` starts Word again when it closes before the time
+  is up, and logs each exit with its time.
 - `omarchohard native seed serve` hands the seed to many devices at once,
   on one private address and a random path, for a set time.
 - `setup --json` ends with one JSON line, `{"state":"ready"|"needs_signin"|"failed",
