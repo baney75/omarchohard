@@ -192,6 +192,56 @@ install_stubs() {
   [ ! -e "$HOME/chattr.log" ]
 }
 
+compress_stubs() {
+  vm=$XDG_DATA_HOME/omarchohard/vm
+  mkdir -p "$vm/storage"
+  printf 'windows disk\n' >"$vm/storage/data.img"
+  fs_is btrfs
+  stub df 'printf "Avail\n99999999\n"'
+  # shellcheck disable=SC2016
+  stub docker 'case "$1" in info) ;; inspect) echo running ;; *) printf "docker %s\n" "$*" >>"$HOME/vm.log" ;; esac'
+  # shellcheck disable=SC2016
+  stub chattr 'printf "chattr %s\n" "$*" >>"$HOME/vm.log"'
+  # A file whose compression property is set reports it, as btrfs does.
+  # shellcheck disable=SC2016
+  stub btrfs "printf 'btrfs %s\n' \"\$*\" >>\"\$HOME/vm.log\"
+case \"\$1 \$2\" in
+'property get') grep -qxF \"\$3\" \"\$HOME/zstd\" 2>/dev/null && echo compression=zstd ;;
+'property set') printf '%s\n' \"\$3\" >>\"\$HOME/zstd\" ;;
+'filesystem defragment') exit \${DEFRAG_RC:-0} ;;
+esac"
+}
+
+@test "desktop compress stops the VM, rewrites its disk compressed, and starts it again" {
+  compress_stubs
+  run "$OH" desktop compress
+  [ "$status" -eq 0 ]
+  img=$vm/storage/data.img tmp=$vm/storage/data.img.compress
+  [ "$(cat "$img")" = 'windows disk' ]
+  [ ! -e "$tmp" ]
+  grep -v 'property get' "$HOME/vm.log" >"$HOME/steps"
+  printf '%s\n' "docker compose -f $vm/compose.yaml stop" "chattr -C -- $tmp" \
+    "btrfs property set $tmp compression zstd" "btrfs filesystem defragment -czstd -- $tmp" \
+    "docker compose -f $vm/compose.yaml up -d" | diff - "$HOME/steps"
+  # The renamed file keeps its property, so a second run changes nothing.
+  printf '%s\n' "$img" >>"$HOME/zstd"
+  rm "$HOME/vm.log"
+  run "$OH" desktop compress
+  [ "$status" -eq 0 ]
+  [[ $output == *"already compressed"* ]]
+  [ "$(grep -c '^docker' "$HOME/vm.log")" -eq 0 ]
+}
+
+@test "a failed desktop compress leaves the disk as it was and starts the VM again" {
+  compress_stubs
+  DEFRAG_RC=1 run "$OH" desktop compress
+  [ "$status" -ne 0 ]
+  [[ $output == *"the disk is unchanged"* ]]
+  [ "$(cat "$vm/storage/data.img")" = 'windows disk' ]
+  [ ! -e "$vm/storage/data.img.compress" ]
+  [ "$(tail -n 1 "$HOME/vm.log")" = "docker compose -f $vm/compose.yaml up -d" ]
+}
+
 @test "desktop install keeps the named volume of a VM made before 0.2.0" {
   install_stubs
   fs_is btrfs

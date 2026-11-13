@@ -160,6 +160,54 @@ oh_desktop_storage() {
     oh_warn "could not turn off copy-on-write on $dir (chattr +C); Windows Setup can fail on btrfs"
 }
 
+# No copy-on-write also means no btrfs compression. Once Windows is set up,
+# `desktop compress` rewrites the disk image as a copy-on-write file that
+# btrfs keeps zstd-compressed: on the test VM, 13 GB of data took 7.5 GB on
+# disk (2026-11-12). Defragmenting with -czstd compresses every extent; the
+# compression property alone left 8 GB raw, as btrfs gave up on extents it
+# guessed would not shrink. Later writes are compressed when they shrink.
+# The VM stops for the copy, which needs room for a second copy.
+oh_desktop_compress() {
+  local dir=$OH_VM_DIR/storage engine state need avail
+  local img=$dir/data.img tmp=$dir/data.img.compress
+  (($# == 0)) || oh_die "usage: omarchohard desktop compress"
+  [[ -f $img ]] || oh_die "no VM disk at $img; a VM made before 0.2.0 keeps its disk in a Docker volume"
+  [[ $(stat -f -c %T "$dir" 2>/dev/null) == btrfs ]] || oh_die "the VM disk is not on btrfs, which is what compresses it"
+  oh_have btrfs || oh_die "btrfs-progs is required (omarchy pkg add btrfs-progs)"
+  if [[ $(btrfs property get "$img" compression 2>/dev/null) == compression=zstd ]]; then
+    oh_say "The VM disk is already compressed."
+    return 0
+  fi
+  need=$(du -k -- "$img" | cut -f1)
+  avail=$(df -k --output=avail -- "$dir" | tail -n 1)
+  ((avail > need + 1048576)) || oh_die "compressing the VM disk needs $((need / 1048576 + 2)) GB free in $dir"
+  engine=$(oh_desktop_engine) || oh_die "Docker or Podman is required"
+  state=$("$engine" inspect -f '{{.State.Status}}' "$OH_VM_NAME" 2>/dev/null) || state=missing
+  case $state in
+  running | paused | restarting)
+    oh_say "Stopping the VM for the copy."
+    [[ $state != paused ]] || oh_run "$engine" unpause "$OH_VM_NAME" >/dev/null
+    oh_desktop_compose stop >/dev/null || oh_die "could not stop the VM"
+    ;;
+  esac
+  oh_say "Compressing the VM disk. This takes a minute or two."
+  # The folder is no-COW, so the new file starts no-COW: clear that while it
+  # is empty, as btrfs allows only then, and compression can be set after.
+  local ok=0
+  rm -f -- "$tmp"
+  oh_run touch -- "$tmp" && oh_run chattr -C -- "$tmp" &&
+    oh_run btrfs property set "$tmp" compression zstd &&
+    oh_run cp --sparse=always -- "$img" "$tmp" &&
+    oh_run btrfs filesystem defragment -czstd -- "$tmp" &&
+    oh_run mv -f -- "$tmp" "$img" && ok=1
+  rm -f -- "$tmp"
+  case $state in
+  running | paused | restarting) oh_desktop_compose up -d >/dev/null || oh_warn "the VM did not start again: omarchohard desktop up" ;;
+  esac
+  ((ok)) || oh_die "compressing the VM disk failed; the disk is unchanged"
+  oh_say "The VM disk is compressed."
+}
+
 oh_desktop_install() {
   local windows=11e office=m365 ram=4G force=0 wait=0 legacy=0 user pass engine tpl
   while (($#)); do
@@ -1330,9 +1378,10 @@ oh_desktop() {
   holder) oh_desktop_holder ;;
   autopause) oh_desktop_autopause ;;
   slim) oh_desktop_slim "$@" ;;
+  compress) oh_desktop_compress "$@" ;;
   update) oh_desktop_update "$@" ;;
   prefer) oh_desktop_prefer "$@" ;;
   remove) oh_desktop_remove "$@" ;;
-  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|open|run|slim|update|activate|prefer|remove" ;;
+  *) oh_die "usage: omarchohard desktop check|install|status|wait|up|down|apps|open|run|slim|compress|update|activate|prefer|remove" ;;
   esac
 }

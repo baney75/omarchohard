@@ -18,6 +18,8 @@ builds are not listed; they carry the version of the next release plus a
   changes it, such as `omarchohard files odt,csv`. Formats you turn off go
   back to the app that had them before.
 - `setup --files microsoft|all|LIST` answers the question without asking.
+- `omarchohard desktop compress` keeps the VM's disk image zstd-compressed on
+  btrfs. On the test VM it cut the image from 13 GB to 7.5 GB on disk.
   `setup --yes` without it keeps the current choice.
 - `.csv` files can open in Excel (`omarchohard files csv`).
 
