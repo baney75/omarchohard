@@ -1221,9 +1221,14 @@ esac'
   SECONDS=0
   run "$OH" desktop open word
   [ "$status" -eq 0 ]
+  [ "$SECONDS" -lt 10 ]
+  # WinApps starts detached, so its log can lag behind open's exit.
+  for _ in $(seq 50); do
+    [ -s "$HOME/winapps.log" ] && break
+    sleep 0.1
+  done
   [ "$(cat "$HOME/winapps.log")" = word-o365 ]
   [ -z "$(ls "$AGENT"/*.go "$AGENT"/*.late 2>/dev/null)" ]
-  [ "$SECONDS" -lt 10 ]
   for _ in $(seq 100); do
     flock -n "$AGENT/holder.lock" true && break
     sleep 0.1
