@@ -1230,7 +1230,7 @@ oh_native_signin_stop() {
   oh_run systemctl --user stop "$OH_NATIVE_SIGNIN.service" >/dev/null 2>&1 || true
   if pid=$(cat -- "$dir/pid" 2>/dev/null) && [[ $pid =~ ^[0-9]+$ ]]; then
     kill -TERM "$pid" 2>/dev/null || true
-    for ((i = 0; i < 100; i++)); do
+    for ((i = 0; i < 400; i++)); do
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.1
     done
@@ -1310,11 +1310,16 @@ oh_native_signin_run() {
   # In the apps' sandbox when it is on, so the Wine server stays one per prefix.
   oh_native_box app
   "${OH_BOX[@]}" env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
-  args=(--office-port "$port" --display "$OH_HIDDEN_DISPLAY" --browser "$bin" --minutes "$minutes" --ready-file "$dir/ready")
+  args=(--office-port "$port" --office-pid "$!" --display "$OH_HIDDEN_DISPLAY" --browser "$bin" --minutes "$minutes" --ready-file "$dir/ready")
   [[ -z $email ]] || args+=(--email "$email")
   [[ -z $device ]] || args+=(--device "$device")
   [[ -z $remote ]] || args+=(--remote "$remote" --session-file "$dir/session")
-  "$py" "$OH_SHARE/native-signin/bridge.py" "${args[@]}" || rc=$?
+  # In the background with a wait, so a stop signal (signin --stop without
+  # systemd) runs the trap at once and reaches the bridge too.
+  "$py" "$OH_SHARE/native-signin/bridge.py" "${args[@]}" &
+  OH_SIGNIN_BRIDGE=$!
+  trap 'kill -TERM "$OH_SIGNIN_BRIDGE" 2>/dev/null; wait "$OH_SIGNIN_BRIDGE" 2>/dev/null; exit 143' TERM INT HUP
+  wait "$OH_SIGNIN_BRIDGE" || rc=$?
   case $rc in
   0) oh_ok "signed in to Office" ;;
   3) oh_say "the sign-in window was closed before the sign-in finished" ;;

@@ -270,11 +270,12 @@ class X11:
 
 
 def wv_targets(port):
+    """Office's pages, or None when its DevTools port does not answer."""
     try:
         with urllib.request.urlopen("http://127.0.0.1:%d/json/list" % port, timeout=1) as r:
             return [t for t in json.load(r) if t.get("type") == "page"]
     except (OSError, ValueError):
-        return []
+        return None
 
 
 class Hub:
@@ -459,9 +460,11 @@ class Browser:
 class Office:
     """Office's sign-in window: WebView2 under Wine, on the hidden screen."""
 
-    def __init__(self, port, display):
+    def __init__(self, port, display, pid=0):
         self.port = port
         self.display = display
+        self.pid = pid
+        self.start_url = None
         self.cdp = None
         self.authorize = None
         self.got_authorize = threading.Event()
@@ -472,7 +475,7 @@ class Office:
         x11 = X11(self.display)
         clicked = 0.0
         while time.time() < deadline:
-            pages = [t for t in wv_targets(self.port) if "officeapps.live.com" in t.get("url", "")]
+            pages = [t for t in wv_targets(self.port) or [] if "officeapps.live.com" in t.get("url", "")]
             if pages:
                 return pages[0]
             if time.time() - clicked > 6:
@@ -486,6 +489,7 @@ class Office:
         raise CDPError("Office's sign-in window did not open")
 
     def connect(self, target):
+        self.start_url = target["url"]
         self.cdp = ws_cdp(target["webSocketDebuggerUrl"])
 
         def paused(p, _s):
@@ -496,6 +500,23 @@ class Office:
 
         self.cdp.on("Fetch.requestPaused", paused)
         self.cdp.call("Fetch.enable", {"patterns": [{"urlPattern": AUTHORIZE, "requestStage": "Request"}]})
+
+    def alive(self):
+        """Word is still running (no pid given: assume so)."""
+        if not self.pid:
+            return True
+        try:
+            os.kill(self.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def back_to_email(self):
+        """Office's window back on its email page, for another address."""
+        self.cdp.call("Page.navigate", {"url": self.start_url})
+        time.sleep(0.5)
 
     def js(self, expr):
         r = self.cdp.call("Runtime.evaluate", {"expression": expr, "returnByValue": True})
@@ -565,16 +586,20 @@ class Office:
         quiet = None
         seen = set()
         while time.time() < end:
+            if not self.alive():
+                return False, "Office closed before it finished signing in"
             pages = wv_targets(self.port)
-            for t in pages:
+            for t in pages or []:
                 where = t.get("url", "").split("?")[0].split("#")[0][:120]
                 if where not in seen:
                     seen.add(where)
                     log("Office shows: " + where)
-            msg = self.error_text(pages)
+            msg = self.error_text(pages or [])
             if msg:
                 return False, msg
-            if not [t for t in pages if t.get("url", "").startswith("http")]:
+            # No sign-in page left (or the window's browser has exited),
+            # with Word still running: Office has taken the sign-in.
+            if not [t for t in pages or [] if t.get("url", "").startswith("http")]:
                 quiet = quiet or time.time()
                 if time.time() - quiet > 6:
                     return True, ""
@@ -680,6 +705,7 @@ class Remote:
         self.b = browser
         self.hub = hub
         self.size = None
+        self.scale = (1.0, 1.0)  # viewer's CSS pixels to the browser's
         browser.cdp.on("Page.screencastFrame", self.frame)
         browser.call("Page.enable")
 
@@ -692,8 +718,9 @@ class Remote:
         t = msg.get("t")
         call = self.b.call
         if t == "viewport":
-            w = max(280, min(int(msg.get("w", 400)), 1200))
-            h = max(400, min(int(msg.get("h", 800)), 1600))
+            vw, vh = max(1, int(msg.get("w", 400))), max(1, int(msg.get("h", 800)))
+            w, h = max(280, min(vw, 1200)), max(400, min(vh, 1600))
+            self.scale = (w / vw, h / vh)
             dpr = max(1.0, min(float(msg.get("dpr", 2)), 2.0))
             dark = bool(msg.get("dark"))
             if self.size != (w, h, dpr, dark):
@@ -705,7 +732,8 @@ class Remote:
             return {}
         if t == "tap":
             for kind in ("mousePressed", "mouseReleased"):
-                call("Input.dispatchMouseEvent", {"type": kind, "x": float(msg["x"]), "y": float(msg["y"]), "button": "left", "clickCount": 1})
+                call("Input.dispatchMouseEvent", {"type": kind, "x": float(msg["x"]) * self.scale[0], "y": float(msg["y"]) * self.scale[1],
+                                                  "button": "left", "clickCount": 1})
             time.sleep(0.05)
             r = call("Runtime.evaluate", {"expression": "(()=>{const e=document.activeElement;return !!e&&(e.isContentEditable||"
                                                         "e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&"
@@ -713,7 +741,8 @@ class Remote:
                                           "returnByValue": True})
             return {"editable": bool(r.get("result", {}).get("value"))}
         if t == "wheel":
-            call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": float(msg.get("x", 10)), "y": float(msg.get("y", 10)),
+            call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": float(msg.get("x", 10)) * self.scale[0],
+                                              "y": float(msg.get("y", 10)) * self.scale[1],
                                               "deltaX": 0, "deltaY": float(msg.get("dy", 0))})
             return {}
         if t == "text":
@@ -747,6 +776,7 @@ def run(a, hub, browser, office, url, remote, deadline):
     watch_answer(browser, answer, caught)
 
     email = a.email
+    retry = False
     while True:
         if not email:
             hub.set(step="email", busy=False)
@@ -758,10 +788,13 @@ def run(a, hub, browser, office, url, remote, deadline):
         starter.join(max(0, deadline - time.time()))
         if not opened.get("ok"):
             raise CDPError(opened.get("err") or "Office's sign-in window did not open")
+        if retry:
+            office.back_to_email()
         office.enter_email(email, time.time() + 30)
         if pick_account(hub, browser, office, deadline) == "ok":
             break
         email = ""
+        retry = True
 
     hub.set(step="microsoft", busy=False)
     browser.call("Page.navigate", {"url": office.authorize})
@@ -795,6 +828,7 @@ def main():
     ap.add_argument("--email", default="")
     ap.add_argument("--device", default=socket.gethostname())
     ap.add_argument("--minutes", type=int, default=30)
+    ap.add_argument("--office-pid", type=int, default=0, help="Word's process, to tell a crash from a finished sign-in")
     a = ap.parse_args()
 
     deadline = time.time() + a.minutes * 60
@@ -812,9 +846,13 @@ def main():
     url = "http://127.0.0.1:%d/#s=%s" % (sock.getsockname()[1], sid)
 
     hub = Hub(a.device, "remote" if remote else "local", a.email)
+    # Serving before the browser starts: the local window opens this page
+    # first thing. Remote input waits for the browser (a 400 until then).
+    inputs = {}
+    serve(hub, sid, sock, (lambda msg: inputs["fn"](msg)) if remote else None)
     profile = tempfile.mkdtemp(prefix="omarchohard-signin-", dir=os.environ.get("XDG_RUNTIME_DIR") or None)
     browser = Browser(a.browser, url, remote, profile)
-    office = Office(a.office_port, a.display)
+    office = Office(a.office_port, a.display, a.office_pid)
     rc = 1
     stopped = []
 
@@ -826,7 +864,8 @@ def main():
         signal.signal(sig, stop)
     try:
         browser.attach()
-        serve(hub, sid, sock, Remote(browser, hub).input if remote else None)
+        if remote:
+            inputs["fn"] = Remote(browser, hub).input
         if a.ready_file:
             with open(a.ready_file, "w") as f:
                 f.write("ready\n")

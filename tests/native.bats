@@ -587,6 +587,25 @@ while True:
   # The page in a browser: tests/live/signin-page.cjs, against a live session.
 }
 
+@test "the local sign-in window's first page load finds the bridge listening" {
+  # A browser that loads its --app page the moment it starts, then quits.
+  cat >"$BATS_TEST_TMPDIR/browser" <<'PY'
+#!/usr/bin/env python3
+import os, sys, urllib.request
+url = next(a[len("--app="):] for a in sys.argv if a.startswith("--app="))
+try:
+    with urllib.request.urlopen(url.split("#")[0], timeout=5) as r:
+        got = str(r.status)
+except OSError as e:
+    got = "error: %s" % e
+open(os.environ["OH_GOT"], "w").write(got + "\n")
+PY
+  chmod +x "$BATS_TEST_TMPDIR/browser"
+  OH_GOT=$BATS_TEST_TMPDIR/got run timeout 60 python3 -I -B "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" \
+    --office-port 1 --display :99 --browser "$BATS_TEST_TMPDIR/browser" --minutes 1
+  [ "$(cat "$BATS_TEST_TMPDIR/got")" = 200 ]
+}
+
 @test "the bridge's page server answers only its session, and serves the page with a CSP" {
   run python3 -I -B - "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" <<'PY'
 import http.client, importlib.util, json, queue, socket, sys
@@ -768,6 +787,20 @@ PY
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | tail -n1 | jq -r .state)" = ready ]
   [ "$(wc -l <"$HOME/ssh.log")" -eq 1 ]
+}
+
+@test "setup with a screen still reports needs_signin when the sign-in window cannot open" {
+  fake_wine
+  make_seed "$BATS_TEST_TMPDIR/remote.tar.zst"
+  # shellcheck disable=SC2016
+  stub ssh 'exec cat "'"$BATS_TEST_TMPDIR"'/remote.tar.zst"'
+  # A sign-in already running makes the window refuse to open.
+  mkdir -p "$XDG_RUNTIME_DIR/omarchohard-signin"
+  printf '%s\n' "$$" >"$XDG_RUNTIME_DIR/omarchohard-signin/pid"
+  WAYLAND_DISPLAY=oh-test run "$OH" setup --yes --tier native --from ssh:laptop --browser chromium --onedrive none --prewarm off --json
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | tail -n1 | jq -e '.state == "needs_signin" and (.detail | test("omarchohard native signin"))'
+  rm -rf "$XDG_RUNTIME_DIR/omarchohard-signin"
 }
 
 @test "setup --tier native --remote-signin prints the sign-in link last" {

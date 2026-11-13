@@ -611,7 +611,7 @@ oh_setup() {
       else
         signin_url='' signin_note="the sign-in link could not start (the line above says why); sign in later with: omarchohard native signin --remote"
       fi
-    elif [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && oh_native_signin "${signin_args[@]}"; then
+    elif [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && (oh_native_signin "${signin_args[@]}"); then
       signin_note="the sign-in window is open on this screen"
     else
       signin_note="sign in on this screen with: omarchohard native signin, or from another device: omarchohard native signin --remote"
