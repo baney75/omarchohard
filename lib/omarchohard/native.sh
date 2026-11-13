@@ -1307,7 +1307,9 @@ oh_native_signin_run() {
   oh_native_devtools "$port"
   local -a env args
   mapfile -t env < <(oh_native_env)
-  env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
+  # In the apps' sandbox when it is on, so the Wine server stays one per prefix.
+  oh_native_box app
+  "${OH_BOX[@]}" env DISPLAY="$OH_HIDDEN_DISPLAY" "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" >/dev/null 2>&1 &
   args=(--office-port "$port" --display "$OH_HIDDEN_DISPLAY" --browser "$bin" --minutes "$minutes" --ready-file "$dir/ready")
   [[ -z $email ]] || args+=(--email "$email")
   [[ -z $device ]] || args+=(--device "$device")
@@ -1323,7 +1325,8 @@ oh_native_signin_run() {
 
 oh_native_signin_end() {
   oh_native_ws -k 2>/dev/null || true
-  oh_dry || timeout 20 env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null || true
+  oh_native_box tmp
+  oh_dry || timeout 20 "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w 2>/dev/null || true
   oh_native_devtools off
   oh_native_ws -k 2>/dev/null || true
   oh_native_hidden_stop
