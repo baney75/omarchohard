@@ -10,6 +10,31 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Added
 
+- Native Office (experimental): `omarchohard setup --tier native` installs
+  Microsoft 365's Word, Excel, PowerPoint, Outlook and OneNote on Linux
+  itself under wine-altars v11.19-altars.1, a Wine fork, with no VM. The
+  first device installs from Microsoft and keeps a seed, its Office from
+  before sign-in; every other device copies a seed with `--from` (a file,
+  `ssh:HOST`, an `https://` link, or a private `http://` link with
+  `--sha256`): 21 s from a file and 32 s from a link on one machine.
+  Word opened in 5.7 s cold and 1.0 s warm.
+- `--plan personal|family|school|business|enterprise` picks the Office
+  product, and a seed for another product is refused. `--shared-computer`
+  turns on shared computer activation for school and enterprise plans.
+- `omarchohard native signin --remote` shows only Office's sign-in window,
+  as a page on the device's Tailscale name (or `--lan` its LAN address) that
+  fits a phone, in light or dark mode, behind a one-time password carried
+  after `#` in the link, and prints the link last as `Sign in here: ...`.
+- Native Office maps Segoe UI to Selawik, Microsoft's open-source stand-in
+  (SIL OFL 1.1, shipped with omarchohard), so Office's text looks as meant.
+- `omarchohard native seed serve` hands the seed to many devices at once,
+  on one private address and a random path, for a set time.
+- `setup --json` ends with one JSON line, `{"state":"ready"|"needs_signin"|"failed",
+  "signin_url":...,"seconds":...}`. A native setup that is done reports
+  `ready` on a rerun, and two at once on one device take turns.
+- `probe` recommends `native` ahead of `desktop` on x86_64 Hyprland machines
+  with 8 GB of memory and 8 GB free disk, and `open_with=native` opens local
+  Office files in native Office.
 - Setup asks which files open in Office: Microsoft Office files only (the
   default), or those plus other formats, all of them or the ones you pick
   (`.odt`, `.ods`, `.odp`, `.rtf`, `.csv`). Only formats of the apps you
