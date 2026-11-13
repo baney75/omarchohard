@@ -8,7 +8,7 @@ OH_ROOT=${OMARCHOHARD_ROOT:-$(dirname "$(dirname "$OH_SELF")")}
 OH_LIB=$OH_ROOT/lib/omarchohard
 OH_SHARE=$OH_ROOT/share/omarchohard
 
-for module in common apps browser integrate open onedrive release doctor desktop setup agent share; do
+for module in common apps browser integrate open onedrive release doctor desktop native setup agent share; do
   # shellcheck source=/dev/null
   source "$OH_LIB/$module.sh"
 done
@@ -21,9 +21,11 @@ Usage: omarchohard <command> [options]
 
 Start here
   setup                  Guided setup: Office tier, browser, sign-in, OneDrive, check.
-                         Agents: setup --yes [--tier desktop|web] [--browser B] [--shared|--isolated]
+                         Agents: setup --yes [--tier native|desktop|web] [--browser B] [--shared|--isolated]
                          [--email E] [--no-mail] [--apps LIST] [--files microsoft|all|LIST]
-                         [--onedrive rclone|abraunegg|none] [--prewarm on|off] [--optimize]
+                         [--onedrive rclone|abraunegg|none] [--prewarm on|off] [--optimize] [--json]
+                         Native: [--plan P] [--from SRC [--sha256 H]] [--shared-computer]
+                         [--remote-signin [--lan]]
 
 Everyday
   install [--isolated] [--no-mail] [--prewarm] [--apps word,excel,teams|all]
@@ -51,6 +53,17 @@ Speed and agents
   probe [--json]         What this device has and what omarchohard recommends
   optimize [--apply]     Tune cache size and prewarm for this device
   prewarm on|off|status  Keep the browser resident so apps open in ~0.2 s
+
+Native Office (Microsoft's desktop apps on Linux under Wine, no VM)
+  native check | status [--json] | run APP [FILE...] | prefer on|off
+  native install [--plan personal|family|school|business|enterprise] [--yes]
+                 [--from FILE|ssh:HOST|https://...|http://PRIVATE/... --sha256 H]
+                 [--shared-computer]     First device from Microsoft, the rest from a seed
+  native signin [--remote [--lan] [--minutes N] [--port P]] | --stop
+                         Sign in on this screen, or through a one-time link
+  native seed --stdout | --path | serve [--minutes N] [--port P] [--lan] | serve --stop
+                         Hand the pre-sign-in seed to your other devices
+  native uninstall [--yes]
 
 Desktop Office (the real Windows apps, in a Windows VM you never see)
   desktop check | install [--wait] | status [--json] | wait | up | down | apps
@@ -93,6 +106,7 @@ main() {
   onedrive) oh_onedrive "$@" ;;
   prewarm) oh_prewarm "$@" ;;
   desktop) oh_desktop "$@" ;;
+  native) oh_native "$@" ;;
   channel) oh_channel "$@" ;;
   update) oh_update "$@" ;;
   version | --version | -V) echo "omarchohard $(oh_version)" ;;

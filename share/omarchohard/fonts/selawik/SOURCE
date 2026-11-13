@@ -1,0 +1,7 @@
+Selawik 1.01 by Microsoft, an open-source stand-in for Segoe UI.
+SIL Open Font License 1.1 (LICENSE.txt, from the repository at tag 1.01).
+The five .ttf files are unchanged from
+https://github.com/microsoft/Selawik/releases/download/1.01/Selawik_Release.zip
+SHA256 3f62c51e05e3b5a1e6241cf92a371f0be2ea1183aa87b30718bbd40832a8d423
+omarchohard copies them into native Office's Wine prefix and maps Segoe UI
+to them, so Office's interface text has its intended shapes and spacing.
