@@ -440,9 +440,11 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   keys work. `native signin --remote` is for a
   person at another device, a phone included: it prints a one-time link to
   a page on this device's Tailscale name (Tailscale only, as it encrypts
-  the password typed through it). The page asks for the email, then shows
-  Microsoft's sign-in page from a headless browser on this device, laid
-  out for that screen, in light or dark mode. A password and Microsoft
+  the password typed through it). The page shows only Microsoft's own
+  pages: first Office's sign-in box, which opens as soon as the sign-in
+  starts, then Microsoft's sign-in page from a headless browser on this
+  device, laid out for that screen, in light or dark mode. A tap shows
+  on the page in about a tenth of a second. A password and Microsoft
   Authenticator work there; passkeys and security keys do not, as they are
   bound to the device in the person's hand. The link carries a one-time
   session id after `#`, which browsers never send to the server, and the
