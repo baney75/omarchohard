@@ -42,6 +42,10 @@ AUTHORIZE = "https://login.microsoftonline.com/*/oauth2/v2.0/authorize*"
 # desktop page on login.live.com (personal).
 OOB = "urn:ietf:wg:oauth:2.0:oob"
 DESKTOP = "https://login.live.com/oauth20_desktop.srf"
+# Seconds Office's WebView2 or the browser may take to answer. On a busy
+# machine Word sits in swap, and a sign-in on 2026-11-14 died when one
+# navigation took over 20 s.
+SLOW = 60
 
 
 def log(msg):
@@ -50,6 +54,17 @@ def log(msg):
 
 class CDPError(Exception):
     pass
+
+
+def navigate(call, url):
+    """Load url. A page slow to answer is still loading, so go on: what
+    comes next waits for its result under its own deadline."""
+    try:
+        call("Page.navigate", {"url": url})
+    except CDPError as e:
+        if "no answer" not in str(e):
+            raise
+        log(str(e) + "; still waiting for the page")
 
 
 class CDP:
@@ -69,7 +84,8 @@ class CDP:
     def on(self, method, fn):
         self._handlers.setdefault(method, []).append(fn)
 
-    def call(self, method, params=None, session=None, timeout=20):
+    def call(self, method, params=None, session=None, timeout=None):
+        timeout = timeout or SLOW
         with self._lock:
             self._id += 1
             i = self._id
@@ -81,7 +97,7 @@ class CDP:
         self._send_raw(json.dumps(msg))
         if not done.wait(timeout):
             self._waiters.pop(i, None)
-            raise CDPError(method + ": no answer")
+            raise CDPError("%s: no answer in %g s" % (method, timeout))
         reply = self._waiters.pop(i)[1]
         if "error" in reply:
             raise CDPError("%s: %s" % (method, reply["error"].get("message")))
@@ -291,6 +307,8 @@ class Hub:
 
     def set(self, **kw):
         with self.cv:
+            if kw.get("step") not in (None, self.state.get("step")):
+                log("step: " + kw["step"])
             self.state.update(kw)
             self.ver += 1
             self.cv.notify_all()
@@ -442,7 +460,7 @@ class Browser:
             time.sleep(0.1)
         raise CDPError("the sign-in window did not open")
 
-    def call(self, method, params=None, timeout=20):
+    def call(self, method, params=None, timeout=None):
         return self.cdp.call(method, params, self.session, timeout)
 
     def close(self):
@@ -515,7 +533,7 @@ class Office:
 
     def back_to_email(self):
         """Office's window back on its email page, for another address."""
-        self.cdp.call("Page.navigate", {"url": self.start_url})
+        navigate(self.cdp.call, self.start_url)
         time.sleep(0.5)
 
     def js(self, expr):
@@ -575,14 +593,14 @@ class Office:
             self.cdp.call("Input.dispatchMouseEvent", {"type": kind, "x": r[0], "y": r[1], "button": "left", "clickCount": 1})
         return True
 
-    def finish(self, answer, timeout=45):
+    def finish(self, answer, timeout=None):
         """Hand Microsoft's answer to Office and wait for its verdict: the
         sign-in window closes, or an error page says why not."""
         try:
             self.cdp.call("Page.navigate", {"url": answer}, timeout=10)
         except CDPError:
             pass  # Office cancels the navigation itself once it has the code
-        end = time.time() + timeout
+        end = time.time() + (timeout or 2 * SLOW)
         quiet = None
         seen = set()
         while time.time() < end:
@@ -645,7 +663,7 @@ def wait_inbox(hub, browser, deadline, kinds):
 def pick_account(hub, browser, office, deadline):
     """After the email: Microsoft's request, or Office asking whether the
     address is a work or a personal account (some are both)."""
-    end = time.time() + 25
+    end = time.time() + SLOW
     while time.time() < end:
         if office.got_authorize.wait(0.3):
             return "ok"
@@ -657,7 +675,7 @@ def pick_account(hub, browser, office, deadline):
                 return "retry"
             hub.set(step="choose", busy=True)
             office.click_text("Work or school account" if msg.get("v") == "work" else "Personal account")
-            if office.got_authorize.wait(20):
+            if office.got_authorize.wait(SLOW):
                 return "ok"
             break
     hub.set(step="email", busy=False, email="",
@@ -790,14 +808,16 @@ def run(a, hub, browser, office, url, remote, deadline):
             raise CDPError(opened.get("err") or "Office's sign-in window did not open")
         if retry:
             office.back_to_email()
-        office.enter_email(email, time.time() + 30)
-        if pick_account(hub, browser, office, deadline) == "ok":
+        office.enter_email(email, time.time() + SLOW)
+        got = pick_account(hub, browser, office, deadline)
+        log("account: " + got)
+        if got == "ok":
             break
         email = ""
         retry = True
 
     hub.set(step="microsoft", busy=False)
-    browser.call("Page.navigate", {"url": office.authorize})
+    navigate(browser.call, office.authorize)
     while not caught.wait(0.25):
         if time.time() > deadline:
             raise CDPError("the sign-in timed out")
@@ -805,7 +825,7 @@ def run(a, hub, browser, office, url, remote, deadline):
             log("the sign-in window was closed")
             return 3
     if not remote:
-        browser.call("Page.navigate", {"url": url})
+        navigate(browser.call, url)
     hub.set(step="finishing")
     ok, why = office.finish(answer["url"])
     if ok:
