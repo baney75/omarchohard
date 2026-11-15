@@ -9,19 +9,19 @@
 :root {
   --bg: #ffffff; --fg: #1b1b1b; --muted: #5f5f5f; --line: #d4d4d4; --field: #ffffff;
   --accent: #0f6cbd; --accent-fg: #ffffff; --accent-hover: #115ea3; --soft: #f3f3f3;
-  --bad: #c50f1f; --good: #107c10;
+  --bad: #c50f1f; --good: #107c10; --backdrop: #f2f2f2;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #1c1c1c; --fg: #f3f3f3; --muted: #ababab; --line: #3d3d3d; --field: #262626;
     --accent: #479ef5; --accent-fg: #0a1a2b; --accent-hover: #62abf5; --soft: #2a2a2a;
-    --bad: #ff7b84; --good: #6ccb5f;
+    --bad: #ff7b84; --good: #6ccb5f; --backdrop: #141414;
   }
 }
 :root[data-theme="dark"] {
   --bg: #1c1c1c; --fg: #f3f3f3; --muted: #ababab; --line: #3d3d3d; --field: #262626;
   --accent: #479ef5; --accent-fg: #0a1a2b; --accent-hover: #62abf5; --soft: #2a2a2a;
-  --bad: #ff7b84; --good: #6ccb5f;
+  --bad: #ff7b84; --good: #6ccb5f; --backdrop: #141414;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -75,8 +75,17 @@ input[type=email]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var
 @keyframes r { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
 [hidden] { display: none !important; }
-#screen { position: fixed; inset: 0; background: var(--bg); touch-action: none; }
+#screen { position: fixed; inset: 0; background: var(--bg); touch-action: none; display: grid; place-items: center; }
 #view { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* On a wide screen Office's box keeps its own size, as it does on Windows. */
+#screen.boxed { background: var(--backdrop); align-content: center; gap: 16px; }
+#screen.boxed #view { border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.08), 0 12px 32px rgba(0,0,0,.12); }
+#screen #on { display: none; color: var(--muted); font-size: 14px; }
+#screen.boxed #on { display: block; }
+@media (max-width: 520px) {
+  #screen.boxed { background: #ffffff; align-content: start; }
+  #screen.boxed #view { border-radius: 0; box-shadow: none; }
+}
 #kbd {
   position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
   font-size: 16px; resize: none; pointer-events: none; caret-color: transparent;
@@ -132,8 +141,9 @@ input[type=email]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var
 
 <div id="screen" hidden>
   <img id="view" alt="Microsoft sign-in" draggable="false">
+  <p id="on"></p>
   <textarea id="kbd" autocomplete="off" autocapitalize="off" spellcheck="false" aria-hidden="true"></textarea>
-  <div id="loading"><div><div class="spin big"></div><p>Opening Microsoft sign-in</p></div></div>
+  <div id="loading"><div><div class="spin big"></div><p>Opening Microsoft sign-in</p><p class="sub" id="load-on"></p></div></div>
 </div>
 
 <script>
@@ -141,6 +151,8 @@ input[type=email]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var
 const $ = (id) => document.getElementById(id);
 const sid = new URLSearchParams(location.hash.slice(1)).get("s") || "";
 history.replaceState(null, "", location.pathname);
+// A new link opened in the same tab is a new session.
+addEventListener("hashchange", () => location.reload());
 let state = {}, queue = Promise.resolve(), sentSize = "";
 
 function api(m) {
@@ -158,7 +170,8 @@ function render(s) {
   state = s;
   const remote = s.mode === "remote";
   $("where").textContent = remote ? "Office on " + s.device : "Office on this computer";
-  const onScreen = remote && s.step === "microsoft";
+  const onScreen = remote && (s.step === "starting" || s.step === "microsoft");
+  $("on").textContent = $("load-on").textContent = "Office on " + s.device;
   $("screen").hidden = !onScreen;
   $("main").hidden = onScreen;
   if (onScreen) { sendSize(); return; }
@@ -211,9 +224,10 @@ function sendSize() {
 addEventListener("resize", () => { if (!$("screen").hidden) sendSize(); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!$("screen").hidden) sendSize(); });
 
+// Where on the picture, from 0 to 1 each way; the bridge knows its size.
 function point(e) {
   const r = view.getBoundingClientRect();
-  return { x: (e.clientX - r.left) * innerWidth / r.width, y: (e.clientY - r.top) * innerHeight / r.height };
+  return { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height };
 }
 let down = null, moved = false, wheelY = 0, wheelAt = null;
 view.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; moved = false; });
@@ -222,7 +236,7 @@ view.addEventListener("pointermove", (e) => {
   const dy = down.y - e.clientY;
   if (Math.abs(dy) > 8 || moved) {
     moved = true; wheelY += dy; down = { x: e.clientX, y: e.clientY };
-    if (!wheelAt) wheelAt = requestAnimationFrame(() => { const p = point(e); api({ t: "wheel", x: p.x, y: p.y, dy: wheelY }); wheelY = 0; wheelAt = null; });
+    if (!wheelAt) wheelAt = requestAnimationFrame(() => { const p = point(e); api({ t: "wheel", fx: p.fx, fy: p.fy, dy: wheelY }); wheelY = 0; wheelAt = null; });
   }
 });
 view.addEventListener("pointerup", (e) => {
@@ -232,9 +246,12 @@ view.addEventListener("pointerup", (e) => {
   // Focus now, inside the tap, or a phone will not open its keyboard.
   kbd.value = MARK; kbd.focus({ preventScroll: true }); kbd.setSelectionRange(1, 1);
   const p = point(e);
-  api({ t: "tap", x: p.x, y: p.y }).then((r) => { if (!r.editable) kbd.blur(); });
+  // A phone's keyboard goes away when the tap was not on a field; with a
+  // real keyboard the focus stays, so no keystroke is lost.
+  const touch = e.pointerType !== "mouse";
+  api({ t: "tap", fx: p.fx, fy: p.fy }).then((r) => { if (touch && !r.editable) kbd.blur(); });
 });
-view.addEventListener("wheel", (e) => { e.preventDefault(); const p = point(e); api({ t: "wheel", x: p.x, y: p.y, dy: e.deltaY }); }, { passive: false });
+view.addEventListener("wheel", (e) => { e.preventDefault(); const p = point(e); api({ t: "wheel", fx: p.fx, fy: p.fy, dy: e.deltaY }); }, { passive: false });
 
 let composing = false;
 kbd.addEventListener("compositionstart", () => { composing = true; });
@@ -266,10 +283,24 @@ if (!sid) {
 } else {
   const es = new EventSource("/events?s=" + encodeURIComponent(sid));
   es.addEventListener("state", (e) => render(JSON.parse(e.data)));
+  // Each frame is decoded before it replaces the last, so nothing flickers,
+  // and a frame that lost the race to a newer one is dropped.
+  let shown = 0, made = 0;
   es.addEventListener("frame", (e) => {
-    const f = JSON.parse(e.data);
-    view.src = "data:image/jpeg;base64," + f.img;
-    $("loading").hidden = true;
+    const f = JSON.parse(e.data), n = ++made, im = new Image();
+    im.src = "data:image/jpeg;base64," + f.img;
+    im.decode().catch(() => {}).then(() => {
+      if (n < shown) return;
+      shown = n;
+      const card = f.fit === "card";
+      // Office's box at its own size, or scaled down to fit a phone.
+      const k = card ? Math.min(1, innerWidth / f.w, (innerHeight - 48) / f.h) : 1;
+      $("screen").classList.toggle("boxed", card);
+      view.style.width = card ? f.w * k + "px" : "";
+      view.style.height = card ? f.h * k + "px" : "";
+      view.src = im.src;
+      $("loading").hidden = true;
+    });
   });
   es.onerror = () => {
     if (state.step === "done" || state.step === "error") { es.close(); return; }

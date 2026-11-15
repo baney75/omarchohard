@@ -98,6 +98,14 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- The remote sign-in page shows only Microsoft's own pages: Office's
+  sign-in box, then Microsoft's page in the headless browser, with no
+  homemade email form. Office's box opens as soon as the sign-in starts, a tap
+  shows in about 0.1 s and a key in under 0.1 s, and the browser's frames
+  are 2x for phones and Retina screens. On 2026-11-14 the old form sat on
+  "Getting Office ready" for two hours while Office's box never answered;
+  Office now gets four minutes, logs its progress every 30 s, and the page
+  says when it does not open.
 - The native sign-in no longer ends when Word is slow to answer. On a busy
   machine with Word in swap, one navigation in Office's sign-in window took
   over 20 s and the whole sign-in stopped with "Page.navigate: no answer".

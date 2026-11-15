@@ -46,6 +46,9 @@ DESKTOP = "https://login.live.com/oauth20_desktop.srf"
 # machine Word sits in swap, and a sign-in on 2026-11-14 died when one
 # navigation took over 20 s.
 SLOW = 60
+# Word's sign-in box has this long to appear before the sign-in gives up and
+# says so, instead of waiting out the whole session.
+OFFICE_WAIT = 240
 
 
 def log(msg):
@@ -288,7 +291,7 @@ class X11:
 def wv_targets(port):
     """Office's pages, or None when its DevTools port does not answer."""
     try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/json/list" % port, timeout=1) as r:
+        with urllib.request.urlopen("http://127.0.0.1:%d/json/list" % port, timeout=5) as r:
             return [t for t in json.load(r) if t.get("type") == "page"]
     except (OSError, ValueError):
         return None
@@ -300,7 +303,8 @@ class Hub:
     def __init__(self, device, mode, email):
         self.cv = threading.Condition()
         self.ver = 0
-        self.state = {"step": "email", "device": device, "mode": mode, "email": email or "", "busy": False, "message": ""}
+        # Remote: Microsoft's own pages from the start, Office's box first.
+        self.state = {"step": "starting" if mode == "remote" else "email", "device": device, "mode": mode, "email": email or "", "busy": False, "message": ""}
         self.frame = None
         self.fver = 0
         self.inbox = queue.Queue()
@@ -313,9 +317,9 @@ class Hub:
             self.ver += 1
             self.cv.notify_all()
 
-    def put_frame(self, data, w, h):
+    def put_frame(self, data, w, h, fit="full"):
         with self.cv:
-            self.frame = {"img": data, "w": w, "h": h}
+            self.frame = {"img": data, "w": w, "h": h, "fit": fit}
             self.fver += 1
             self.cv.notify_all()
 
@@ -345,7 +349,10 @@ def serve(hub, sid, sock, remote_input):
             if ctype.startswith("text/html"):
                 self.send_header("Content-Security-Policy", csp)
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the viewer left before the answer arrived
 
         def do_GET(self):
             path = urllib.parse.urlsplit(self.path).path
@@ -434,7 +441,9 @@ class Browser:
                 "--password-store=basic", "--disable-features=Translate,MediaRouter",
                 "--class=omarchohard-signin", "--lang=" + lang]
         if remote:
-            args += ["--headless=new", "--hide-scrollbars", "--mute-audio", "--window-size=420,820", "about:blank"]
+            args += ["--headless=new", "--hide-scrollbars", "--mute-audio", "--window-size=420,820",
+                     # Sharp text on a phone or a Retina screen: frames at 2x.
+                     "--force-device-scale-factor=2", "about:blank"]
         else:
             args += ["--window-size=460,700", "--app=" + url]
 
@@ -492,10 +501,20 @@ class Office:
         WebView2 page answers."""
         x11 = X11(self.display)
         clicked = 0.0
+        start = said = time.time()
+        deadline = min(deadline, start + OFFICE_WAIT)
         while time.time() < deadline:
-            pages = [t for t in wv_targets(self.port) or [] if "officeapps.live.com" in t.get("url", "")]
+            listed = wv_targets(self.port)
+            pages = [t for t in listed or [] if "officeapps.live.com" in t.get("url", "")]
             if pages:
+                log("Office's sign-in box is ready after %d s" % (time.time() - start))
                 return pages[0]
+            if time.time() - said > 30:
+                said = time.time()
+                log("still waiting for Office's sign-in box (%d s): %s" % (
+                    said - start, "its DevTools port does not answer" if listed is None
+                    else "no pages" if not listed
+                    else "pages " + ", ".join(t.get("url", "").split("?")[0][:60] for t in listed)))
             if time.time() - clicked > 6:
                 w = x11.find("Sign in to set up Office")
                 if w:
@@ -504,11 +523,15 @@ class Office:
                     x11.click(x + 136, y + hh - 185)
                     clicked = time.time()
             time.sleep(0.25)
-        raise CDPError("Office's sign-in window did not open")
+        if deadline < start + OFFICE_WAIT:
+            raise CDPError("the sign-in timed out")
+        minutes = max(1, round(OFFICE_WAIT / 60))
+        raise CDPError("Office's sign-in box did not open in %d minute%s" % (minutes, "" if minutes == 1 else "s"))
 
     def connect(self, target):
         self.start_url = target["url"]
-        self.cdp = ws_cdp(target["webSocketDebuggerUrl"])
+        self.ws = target["webSocketDebuggerUrl"]
+        self.cdp = ws_cdp(self.ws)
 
         def paused(p, _s):
             self.cdp.call("Fetch.failRequest", {"requestId": p["requestId"], "errorReason": "Aborted"})
@@ -518,6 +541,29 @@ class Office:
 
         self.cdp.on("Fetch.requestPaused", paused)
         self.cdp.call("Fetch.enable", {"patterns": [{"urlPattern": AUTHORIZE, "requestStage": "Request"}]})
+
+    def settle(self, deadline, quiet=2.5):
+        """Wait until the email page has stayed loaded for a moment: it
+        reloads itself once soon after it opens, and drops what was typed."""
+        end = min(deadline, time.time() + 30)
+        since = None
+        while time.time() < end:
+            try:
+                ok = self.js("(()=>{const ok=document.readyState==='complete'&&!!%s&&window.__ohSeen===1;"
+                             "window.__ohSeen=1;return ok})()" % self.FIELD)
+            except CDPError:
+                ok = False  # asked mid-reload
+            if not ok:
+                since = None
+            elif since is None:
+                since = time.time()
+            elif time.time() - since >= quiet:
+                return
+            time.sleep(0.25)
+        log("Office's sign-in page did not settle; showing it anyway")
+
+    def connect_input(self):
+        return ws_cdp(self.ws)
 
     def alive(self):
         """Word is still running (no pid given: assume so)."""
@@ -714,54 +760,208 @@ def watch_answer(browser, answer, caught):
 
 
 class Remote:
-    """The headless browser shown on another device: frames out, taps and
-    keys in. The page is laid out for that device's screen."""
+    """Microsoft's pages shown on another device: frames out, taps and keys
+    in. First Office's own sign-in box, then the real browser once Office
+    asks Microsoft for the code. Each is laid out for the viewer's screen."""
 
     KEYS = {"Backspace": 8, "Tab": 9, "Enter": 13, "Escape": 27, "ArrowLeft": 37, "ArrowRight": 39, "Delete": 46}
+    # Office's box keeps its own size on a wide screen, as on Windows.
+    CARD = (456, 560)
+    FAST, IDLE = 0.04, 0.4
+    EDITABLE = ("(()=>{const e=document.activeElement;return !!e&&(e.isContentEditable||e.tagName==='TEXTAREA'||"
+                "(e.tagName==='INPUT'&&!/^(button|submit|checkbox|radio)$/.test(e.type)))})()")
 
     def __init__(self, browser, hub):
         self.b = browser
         self.hub = hub
-        self.size = None
-        self.scale = (1.0, 1.0)  # viewer's CSS pixels to the browser's
+        self.office = None
+        self.viewer = None   # (width, height, dpr, dark) in the viewer's CSS pixels
+        self.size = None     # what the source is laid out at: (w, h, dpr, dark, fit)
+        self.lock = threading.Lock()
+        self.poke = threading.Event()
+        # Input and Office's captures take turns: under Wine a click that
+        # came while WebView2 drew a capture at 2x landed at half its place.
+        self.turn = threading.Lock()
+        self.hot = 0.0       # capture fast until then: the person is typing or tapping
+        self.feel = None     # Office's input connection
+        self.source = None   # "office" or "browser"; nothing is shown before
+        self.k = (1.0, 1.0)  # Office's pointer scale, as last measured
         browser.cdp.on("Page.screencastFrame", self.frame)
         browser.call("Page.enable")
 
+    def call(self, method, params=None):
+        return self.office.cdp.call(method, params) if self.office else self.b.call(method, params)
+
+    def act(self, method, params=None):
+        """Input to the current source. Office's goes over a second
+        connection with no screen override: under Wine, WebView2 took
+        clicks from the laid-out connection at half their position."""
+        return self.feel.call(method, params) if self.office and self.feel else self.call(method, params)
+
+    def warm(self):
+        """Open the connections to Microsoft's sign-in servers now, so its
+        page draws at once after Next."""
+        for host in ("login.microsoftonline.com", "login.live.com", "aadcdn.msauth.net"):
+            try:
+                self.b.call("Runtime.evaluate", {"expression": "fetch('https://%s/',{mode:'no-cors'}).catch(()=>0)" % host})
+            except CDPError:
+                pass
+
+    def use_office(self, office):
+        """Show Office's box. Its WebView2 sends no screencast frames under
+        Wine, so it is captured on a short timer and after every input."""
+        with self.lock:
+            self.office, self.size, self.source = office, None, "office"
+            self.feel = office.connect_input()
+        self.layout()
+        threading.Thread(target=self.poll, args=(office,), daemon=True).start()
+
+    def prefill(self, email):
+        """Type a known address into Microsoft's own email field, once the
+        page has settled (one still starting up drops what was typed)."""
+        ready = "document.readyState==='complete'&&!!" + Office.FIELD
+        end = time.time() + 15
+        while True:
+            try:
+                if self.feel.call("Runtime.evaluate", {"expression": ready, "returnByValue": True}).get("result", {}).get("value"):
+                    break
+            except CDPError:
+                pass  # asked mid-reload
+            if time.time() > end:
+                log("Office's email field did not appear; the address was not filled in")
+                return
+            time.sleep(0.2)
+        time.sleep(0.6)
+        with self.turn:
+            self.feel.call("Runtime.evaluate", {"expression": "(i=>{i.focus();i.select()})(%s)" % Office.FIELD})
+            self.feel.call("Input.insertText", {"text": email})
+        self.poke.set()
+
+    def use_browser(self):
+        with self.lock:
+            feel, self.feel = self.feel, None
+            self.office, self.size, self.source = None, None, "browser"
+            self.k = (1.0, 1.0)  # Office's pointer scale is not the browser's
+        if feel is not None and hasattr(feel, "sock"):
+            try:
+                feel.sock.close()
+            except OSError:
+                pass
+        self.layout()
+
+    def poll(self, office):
+        last = None
+        while self.office is office:
+            # A capture takes 30 to 70 ms under Wine, so right after input
+            # this runs about as fast as Office draws; idle, it stays warm.
+            self.poke.wait(self.FAST if time.time() < self.hot else self.IDLE)
+            self.poke.clear()
+            try:
+                with self.turn:
+                    shot = office.cdp.call("Page.captureScreenshot", {"format": "jpeg", "quality": 85}, timeout=2)["data"]
+            except CDPError:
+                continue
+            size = self.size
+            if shot != last and size and self.office is office:
+                last = shot
+                self.hub.put_frame(shot, size[0], size[1], size[4])
+
     def frame(self, p, s):
         self.b.cdp.call("Page.screencastFrameAck", {"sessionId": p["sessionId"]}, s)
-        m = p["metadata"]
-        self.hub.put_frame(p["data"], m["deviceWidth"], m["deviceHeight"])
+        if self.source == "browser":
+            m = p["metadata"]
+            self.hub.put_frame(p["data"], m["deviceWidth"], m["deviceHeight"])
+
+    def layout(self):
+        """Lay the current source out for the viewer's screen."""
+        if not self.source:
+            return
+        # Before anyone opens the link: a desktop screen, so the first frame
+        # is ready the moment they do.
+        vw, vh, dpr, dark = self.viewer or (1280, 800, 2.0, False)
+        fit = "full"
+        w, h = max(280, min(vw, 2560)), max(400, min(vh, 1600))
+        if self.office:
+            # Office's WebView2 under Wine keeps the first size it is given
+            # and ignores later ones, so its box is laid out once, at its
+            # own size, and the page scales it to a small screen.
+            (w, h), dpr, dark, fit = self.CARD, 2.0, False, "card"
+        if self.size == (w, h, dpr, dark, fit):
+            return
+        self.size = (w, h, dpr, dark, fit)
+        self.call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-color-scheme", "value": "dark" if dark else "light"}]})
+        self.call("Emulation.setDeviceMetricsOverride", {"width": w, "height": h, "deviceScaleFactor": dpr, "mobile": fit == "full" and w < 600})
+        if self.office:
+            self.poke.set()
+        else:
+            self.call("Page.stopScreencast")
+            self.call("Page.startScreencast", {"format": "jpeg", "quality": 80, "maxWidth": int(w * dpr), "maxHeight": int(h * dpr)})
+
+    def aim(self, x, y):
+        """Where to send a point so Office's page gets it at (x, y). Its
+        WebView2 under Wine took some runs' input at half its position and
+        others' at the right one, so each tap is checked with a move, which
+        changes nothing on the page, and corrected."""
+        if not self.office:
+            return x, y
+        watch = ("if(!window.__ohL){window.__ohL=1;addEventListener('mousemove',"
+                 "e=>{window.__ohAt=[e.clientX,e.clientY]},true)}window.__ohAt=null")
+        for _ in range(2):
+            sx, sy = x * self.k[0], y * self.k[1]
+            self.act("Runtime.evaluate", {"expression": watch})
+            self.act("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": sx, "y": sy})
+            got = self.act("Runtime.evaluate", {"expression": "window.__ohAt", "returnByValue": True}).get("result", {}).get("value")
+            if not (isinstance(got, list) and len(got) == 2 and min(got) > 0):
+                break
+            if abs(got[0] - x) <= 2 and abs(got[1] - y) <= 2:
+                break
+            k = (sx / got[0], sy / got[1])
+            if k != self.k:
+                log("Office takes the pointer at %.2gx; correcting" % (1 / k[0]))
+            self.k = k
+        return x * self.k[0], y * self.k[1]
+
+    def at(self, msg):
+        """A point the page gives as a fraction of the picture, in the
+        source's CSS pixels."""
+        size = self.size or (1, 1)
+        fx = min(max(float(msg.get("fx", 0)), 0.0), 1.0)
+        fy = min(max(float(msg.get("fy", 0)), 0.0), 1.0)
+        return fx * size[0], fy * size[1]
 
     def input(self, msg):
         t = msg.get("t")
-        call = self.b.call
+        call = self.act
+        self.hot = time.time() + 3
+        try:
+            with self.turn:
+                return self.handle(t, msg, call)
+        finally:
+            self.poke.set()
+
+    def handle(self, t, msg, call):
         if t == "viewport":
             vw, vh = max(1, int(msg.get("w", 400))), max(1, int(msg.get("h", 800)))
-            w, h = max(280, min(vw, 1200)), max(400, min(vh, 1600))
-            self.scale = (w / vw, h / vh)
             dpr = max(1.0, min(float(msg.get("dpr", 2)), 2.0))
-            dark = bool(msg.get("dark"))
-            if self.size != (w, h, dpr, dark):
-                self.size = (w, h, dpr, dark)
-                call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-color-scheme", "value": "dark" if dark else "light"}]})
-                call("Emulation.setDeviceMetricsOverride", {"width": w, "height": h, "deviceScaleFactor": dpr, "mobile": w < 700})
-                call("Page.stopScreencast")
-                call("Page.startScreencast", {"format": "jpeg", "quality": 80, "maxWidth": int(w * dpr), "maxHeight": int(h * dpr)})
+            self.viewer = (vw, vh, dpr, bool(msg.get("dark")))
+            self.layout()
             return {}
         if t == "tap":
+            x, y = self.aim(*self.at(msg))
+            call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
             for kind in ("mousePressed", "mouseReleased"):
-                call("Input.dispatchMouseEvent", {"type": kind, "x": float(msg["x"]) * self.scale[0], "y": float(msg["y"]) * self.scale[1],
-                                                  "button": "left", "clickCount": 1})
-            time.sleep(0.05)
-            r = call("Runtime.evaluate", {"expression": "(()=>{const e=document.activeElement;return !!e&&(e.isContentEditable||"
-                                                        "e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&"
-                                                        "!/^(button|submit|checkbox|radio)$/.test(e.type)))})()",
-                                          "returnByValue": True})
-            return {"editable": bool(r.get("result", {}).get("value"))}
+                call("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1})
+            # Focus can land a moment after the click; ask again once.
+            for wait in (0, 0.06):
+                time.sleep(wait)
+                r = call("Runtime.evaluate", {"expression": self.EDITABLE, "returnByValue": True})
+                if r.get("result", {}).get("value"):
+                    return {"editable": True}
+            return {"editable": False}
         if t == "wheel":
-            call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": float(msg.get("x", 10)) * self.scale[0],
-                                              "y": float(msg.get("y", 10)) * self.scale[1],
-                                              "deltaX": 0, "deltaY": float(msg.get("dy", 0))})
+            x, y = self.at(msg)
+            x, y = x * self.k[0], y * self.k[1]
+            call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": float(msg.get("dy", 0))})
             return {}
         if t == "text":
             call("Input.insertText", {"text": str(msg.get("s", ""))[:2000]})
@@ -774,6 +974,45 @@ class Remote:
                 call("Input.dispatchKeyEvent", {"type": "char", "key": "Enter", "text": "\r", "windowsVirtualKeyCode": 13})
             return {}
         return {}
+
+
+def run_remote(hub, browser, office, ui, deadline):
+    """Another device sees Microsoft's own pages only: Office's sign-in box,
+    then, once Office asks Microsoft for a code, the real browser."""
+    answer = {}
+    caught = threading.Event()
+    watch_answer(browser, answer, caught)
+    office.connect(office.open_signin(deadline))
+    office.settle(deadline)
+    ui.use_office(office)
+    if hub.state.get("email"):
+        ui.prefill(hub.state["email"])
+    hub.set(step="microsoft")
+    ui.warm()
+    while not office.got_authorize.wait(0.25):
+        if time.time() > deadline:
+            raise CDPError("the sign-in timed out")
+        if not office.alive():
+            raise CDPError("Word closed before the sign-in finished")
+        if browser.proc.poll() is not None:
+            raise CDPError("the sign-in browser closed")
+    log("Office asked Microsoft for a code")
+    ui.use_browser()
+    navigate(browser.call, office.authorize)
+    while not caught.wait(0.25):
+        if time.time() > deadline:
+            raise CDPError("the sign-in timed out")
+        if browser.proc.poll() is not None:
+            raise CDPError("the sign-in browser closed")
+    hub.set(step="finishing")
+    ok, why = office.finish(answer["url"])
+    if ok:
+        hub.set(step="done")
+        log("signed in")
+        return 0
+    hub.set(step="error", message=why)
+    log("Office did not accept the sign-in: " + why)
+    return 1
 
 
 def run(a, hub, browser, office, url, remote, deadline):
@@ -887,20 +1126,25 @@ def main():
     try:
         browser.attach()
         if remote:
-            inputs["fn"] = Remote(browser, hub).input
+            ui = Remote(browser, hub)
+            inputs["fn"] = ui.input
         if a.ready_file:
             with open(a.ready_file, "w") as f:
                 f.write("ready\n")
-        rc = run(a, hub, browser, office, url, remote, deadline)
-    except CDPError as e:
+        rc = run_remote(hub, browser, office, ui, deadline) if remote else run(a, hub, browser, office, url, remote, deadline)
+    except (CDPError, OSError) as e:
         log(str(e))
         hub.set(step="error", message=str(e)[:1].upper() + str(e)[1:] + ".")
+    except RuntimeError:
+        # A stop signal that lands inside Event.wait breaks the wait's lock.
+        if not stopped:
+            raise
     finally:
         if browser.proc.poll() is None and not stopped:
             time.sleep(4 if rc == 0 else 2)  # time to read the result
         browser.close()
         shutil.rmtree(profile, ignore_errors=True)
-    return rc
+    return 128 + stopped[0] if stopped else rc
 
 
 if __name__ == "__main__":

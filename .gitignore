@@ -2,3 +2,4 @@
 /tests/.tmp/
 *.partial
 share/omarchohard/VERSION
+__pycache__/
