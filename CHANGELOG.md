@@ -98,6 +98,12 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- On the remote sign-in page, Microsoft's passkey step no longer spins
+  forever with "Try again" and the back arrow dead: the browser on the
+  machine, which has no passkey, turns the request down at once, so
+  Microsoft offers its other ways to sign in. Passkeys still work in the
+  local window.
+
 - The remote sign-in page's pointer takes the shape it has on Microsoft's
   page: a hand over buttons and links, an I-beam in fields. Moving the mouse
   also lights buttons up as it does on the machine itself.
