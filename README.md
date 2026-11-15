@@ -446,7 +446,9 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   device, laid out for that screen, in light or dark mode. A tap shows
   on the page in about a tenth of a second. A password and Microsoft
   Authenticator work there; passkeys and security keys do not, as they are
-  bound to the device in the person's hand. The link carries a one-time
+  bound to the device in the person's hand. When Microsoft asks for one,
+  the page says so, and an account whose only way in is a passkey signs in
+  at the machine itself with `native signin`. The link carries a one-time
   session id after `#`, which browsers never send to the server, and the
   page takes it out of the address bar. It is printed as
   `Sign in here: http://laptop.example.ts.net:6080/#s=...` and sent as a

@@ -781,10 +781,12 @@ class Remote:
     # This browser has no passkey and no screen for one: a passkey request
     # spun forever and Microsoft's "Try again" and back arrow stayed dead
     # (2026-11-15). It is now turned down at once, as a closed passkey window
-    # would be, so Microsoft offers its other ways to sign in.
+    # would be, so Microsoft offers its other ways to sign in, and the page
+    # says why: an account with no other way has to sign in on the machine.
     NO_PASSKEY = (
         "(()=>{const c=navigator.credentials;if(!c)return;"
-        "const no=()=>Promise.reject(new DOMException('There is no passkey on this computer.','NotAllowedError'));"
+        "const no=()=>{try{window.ohPasskey('asked')}catch(e){}"
+        "return Promise.reject(new DOMException('There is no passkey on this computer.','NotAllowedError'))};"
         "const get=c.get.bind(c),create=c.create.bind(c);"
         "c.get=(o)=>o&&o.publicKey?no():get(o);c.create=(o)=>o&&o.publicKey?no():create(o);"
         "const P=window.PublicKeyCredential;if(P){"
@@ -808,7 +810,15 @@ class Remote:
         self.k = (1.0, 1.0)  # Office's pointer scale, as last measured
         browser.cdp.on("Page.screencastFrame", self.frame)
         browser.call("Page.enable")
+        browser.cdp.on("Runtime.bindingCalled", self.passkey)
+        browser.call("Runtime.enable")  # the binding reports only with Runtime on
+        browser.call("Runtime.addBinding", {"name": "ohPasskey"})
         browser.call("Page.addScriptToEvaluateOnNewDocument", {"source": self.NO_PASSKEY})
+
+    def passkey(self, p, _s):
+        if p.get("name") == "ohPasskey" and not self.hub.state.get("passkey"):
+            log("Microsoft asked for a passkey, which works only on this computer")
+            self.hub.set(passkey=True)
 
     def call(self, method, params=None):
         return self.office.cdp.call(method, params) if self.office else self.b.call(method, params)
