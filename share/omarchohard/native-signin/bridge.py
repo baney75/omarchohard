@@ -778,6 +778,18 @@ class Remote:
               "input[type=submit],input[type=button],input[type=checkbox],input[type=radio]'))return'pointer';"
               "if(e.isContentEditable||e.matches('textarea,input'))return'text';return'default'})(%.1f,%.1f)")
     CURSORS = {"default", "pointer", "text", "not-allowed", "wait", "progress", "help"}
+    # This browser has no passkey and no screen for one: a passkey request
+    # spun forever and Microsoft's "Try again" and back arrow stayed dead
+    # (2026-11-15). It is now turned down at once, as a closed passkey window
+    # would be, so Microsoft offers its other ways to sign in.
+    NO_PASSKEY = (
+        "(()=>{const c=navigator.credentials;if(!c)return;"
+        "const no=()=>Promise.reject(new DOMException('There is no passkey on this computer.','NotAllowedError'));"
+        "const get=c.get.bind(c),create=c.create.bind(c);"
+        "c.get=(o)=>o&&o.publicKey?no():get(o);c.create=(o)=>o&&o.publicKey?no():create(o);"
+        "const P=window.PublicKeyCredential;if(P){"
+        "P.isUserVerifyingPlatformAuthenticatorAvailable=()=>Promise.resolve(false);"
+        "P.isConditionalMediationAvailable=()=>Promise.resolve(false)}})()")
 
     def __init__(self, browser, hub):
         self.b = browser
@@ -796,6 +808,7 @@ class Remote:
         self.k = (1.0, 1.0)  # Office's pointer scale, as last measured
         browser.cdp.on("Page.screencastFrame", self.frame)
         browser.call("Page.enable")
+        browser.call("Page.addScriptToEvaluateOnNewDocument", {"source": self.NO_PASSKEY})
 
     def call(self, method, params=None):
         return self.office.cdp.call(method, params) if self.office else self.b.call(method, params)
