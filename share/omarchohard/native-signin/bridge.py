@@ -770,6 +770,14 @@ class Remote:
     FAST, IDLE = 0.04, 0.4
     EDITABLE = ("(()=>{const e=document.activeElement;return !!e&&(e.isContentEditable||e.tagName==='TEXTAREA'||"
                 "(e.tagName==='INPUT'&&!/^(button|submit|checkbox|radio)$/.test(e.type)))})()")
+    # The cursor the page would show at a point: a hand on links and
+    # buttons, an I-beam in fields, as on the machine itself.
+    CURSOR = ("((x,y)=>{const e=document.elementFromPoint(x,y);if(!e)return'default';"
+              "const c=getComputedStyle(e).cursor;if(c&&c!=='auto')return c;"
+              "if(e.closest('a[href],button,label,select,summary,[role=button],[role=link],[role=option],[onclick],"
+              "input[type=submit],input[type=button],input[type=checkbox],input[type=radio]'))return'pointer';"
+              "if(e.isContentEditable||e.matches('textarea,input'))return'text';return'default'})(%.1f,%.1f)")
+    CURSORS = {"default", "pointer", "text", "not-allowed", "wait", "progress", "help"}
 
     def __init__(self, browser, hub):
         self.b = browser
@@ -932,7 +940,9 @@ class Remote:
     def input(self, msg):
         t = msg.get("t")
         call = self.act
-        self.hot = time.time() + 3
+        # A hover can change the page (a button lights up), so capture
+        # quickly for a moment; typing and taps keep it fast longer.
+        self.hot = max(self.hot, time.time() + (0.6 if t == "hover" else 3))
         try:
             with self.turn:
                 return self.handle(t, msg, call)
@@ -958,6 +968,12 @@ class Remote:
                 if r.get("result", {}).get("value"):
                     return {"editable": True}
             return {"editable": False}
+        if t == "hover":
+            x, y = self.at(msg)
+            call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x * self.k[0], "y": y * self.k[1]})
+            r = call("Runtime.evaluate", {"expression": self.CURSOR % (x, y), "returnByValue": True})
+            c = r.get("result", {}).get("value")
+            return {"cursor": c if c in self.CURSORS else "default"}
         if t == "wheel":
             x, y = self.at(msg)
             x, y = x * self.k[0], y * self.k[1]

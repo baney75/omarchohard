@@ -76,7 +76,7 @@ input[type=email]:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
 [hidden] { display: none !important; }
 #screen { position: fixed; inset: 0; background: var(--bg); touch-action: none; display: grid; place-items: center; }
-#view { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#view { width: 100%; height: 100%; display: block; cursor: default; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 /* On a wide screen Office's box keeps its own size, as it does on Windows. */
 #screen.boxed { background: var(--backdrop); align-content: center; gap: 16px; }
 #screen.boxed #view { border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.08), 0 12px 32px rgba(0,0,0,.12); }
@@ -250,6 +250,27 @@ view.addEventListener("pointerup", (e) => {
   // real keyboard the focus stays, so no keystroke is lost.
   const touch = e.pointerType !== "mouse";
   api({ t: "tap", fx: p.fx, fy: p.fy }).then((r) => { if (touch && !r.editable) kbd.blur(); });
+});
+// With a mouse, the pointer takes the shape it has on the page itself: a
+// hand on buttons and links, an I-beam in fields. One ask at a time, always
+// for where the pointer is now.
+const CURSORS = ["default", "pointer", "text", "not-allowed", "wait", "progress", "help"];
+let hoverAt = null, hovering = false;
+function hover() {
+  if (hovering || !hoverAt) return;
+  const p = hoverAt;
+  hoverAt = null; hovering = true;
+  fetch("/api", { method: "POST", headers: { "Content-Type": "application/json", "X-Session": sid },
+                  body: JSON.stringify({ t: "hover", fx: p.fx, fy: p.fy }) })
+    .then((r) => r.json())
+    .then((r) => { if (CURSORS.includes(r.cursor)) view.style.cursor = r.cursor; })
+    .catch(() => {})
+    .finally(() => { hovering = false; hover(); });
+}
+view.addEventListener("pointermove", (e) => {
+  if (e.pointerType !== "mouse" || e.buttons) return;
+  hoverAt = point(e);
+  hover();
 });
 view.addEventListener("wheel", (e) => { e.preventDefault(); const p = point(e); api({ t: "wheel", fx: p.fx, fy: p.fy, dy: e.deltaY }); }, { passive: false });
 

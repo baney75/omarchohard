@@ -695,6 +695,7 @@ class Fake:
         self.calls = []
         self.half = half
         self.at = None
+        self.cursor = "text"
     def on(self, *_a):
         pass
     def call(self, method, params=None, session=None, timeout=None):
@@ -704,6 +705,8 @@ class Fake:
             self.at = [params["x"] * k, params["y"] * k]
         if method == "Runtime.evaluate" and params["expression"] == "window.__ohAt":
             return {"result": {"value": self.at}}
+        if method == "Runtime.evaluate" and "elementFromPoint" in params["expression"]:
+            return {"result": {"value": self.cursor}}
         if method == "Runtime.evaluate":
             return {"result": {"value": True}}
         if method == "Page.captureScreenshot":
@@ -729,6 +732,12 @@ r = ui.input({"t": "tap", "fx": 0.5, "fy": 0.25})
 tap = office.feel.last("Input.dispatchMouseEvent")
 print("office tap", tap["x"], tap["y"], r)
 print("input on the laid-out connection", [m for m, _ in office.cdp.calls if m.startswith("Input.")])
+# A mouse over the picture gets the cursor the page has there.
+r = ui.input({"t": "hover", "fx": 0.5, "fy": 0.25})
+move = office.feel.last("Input.dispatchMouseEvent")
+print("office hover", move["x"], move["y"], r)
+office.feel.cursor = "url(https://example.com/x.png), auto"
+print("odd cursor", ui.input({"t": "hover", "fx": 0.5, "fy": 0.25}))
 m = office.cdp.last("Emulation.setDeviceMetricsOverride")
 print("office card", m["width"], m["height"], m["mobile"])
 time.sleep(0.3)
@@ -779,6 +788,8 @@ PY
   [ "$status" -eq 0 ]
   [[ $output == *"office tap 456.0 280.0 {'editable': True}"* ]]
   [[ $output == *"input on the laid-out connection []"* ]]
+  [[ $output == *"office hover 456.0 280.0 {'cursor': 'text'}"* ]]
+  [[ $output == *"odd cursor {'cursor': 'default'}"* ]]
   [[ $output == *"office card 456 560 False"* ]]
   [[ $output == *"office frame card 456 560"* ]]
   [[ $output == *"office laid out 1 time"* ]]

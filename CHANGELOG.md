@@ -98,6 +98,10 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- The remote sign-in page's pointer takes the shape it has on Microsoft's
+  page: a hand over buttons and links, an I-beam in fields. Moving the mouse
+  also lights buttons up as it does on the machine itself.
+
 - The remote sign-in page shows only Microsoft's own pages: Office's
   sign-in box, then Microsoft's page in the headless browser, with no
   homemade email form. Office's box opens as soon as the sign-in starts, a tap
