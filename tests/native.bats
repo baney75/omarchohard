@@ -681,8 +681,8 @@ PY
   # 2026-11-14: a homemade email form sat on "Getting Office ready" for two
   # hours while Office's box never answered. The remote page now streams
   # Microsoft's own pages, and Office gets four minutes, not the session.
-  # 2026-11-15: Office's WebView2 took clicks from the connection that laid
-  # it out at 2x at half their position, so a tap missed the email field.
+  # 2026-11-15: Office's WebView2 took some runs' clicks at half their
+  # position, so a tap missed the email field; each tap is now checked.
   run python3 -I -B - "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" <<'PY'
 import importlib.util, sys, time, types
 
@@ -691,12 +691,19 @@ bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 
 class Fake:
-    def __init__(self):
+    def __init__(self, half=False):
         self.calls = []
+        self.half = half
+        self.at = None
     def on(self, *_a):
         pass
     def call(self, method, params=None, session=None, timeout=None):
         self.calls.append((method, params or {}))
+        if method == "Input.dispatchMouseEvent" and params["type"] == "mouseMoved":
+            k = 0.5 if self.half else 1
+            self.at = [params["x"] * k, params["y"] * k]
+        if method == "Runtime.evaluate" and params["expression"] == "window.__ohAt":
+            return {"result": {"value": self.at}}
         if method == "Runtime.evaluate":
             return {"result": {"value": True}}
         if method == "Page.captureScreenshot":
@@ -708,11 +715,15 @@ class Fake:
 browser = Fake()
 browser.cdp = browser
 # Office's input goes over its own connection, with no screen override.
-office = types.SimpleNamespace(cdp=Fake(), feel=Fake())
+# Under Wine it took some runs' clicks at half their position.
+office = types.SimpleNamespace(cdp=Fake(), feel=Fake(half=True))
 office.connect_input = lambda: office.feel
 hub = bridge.Hub("lab-07", "remote", "")
 ui = bridge.Remote(browser, hub)
 ui.input({"t": "viewport", "w": 1440, "h": 900, "dpr": 2})
+# Before Office's box opens, the browser's blank page is never shown.
+ui.frame({"sessionId": 1, "data": "blank", "metadata": {"deviceWidth": 1440, "deviceHeight": 900}}, None)
+print("frame while starting", hub.frame)
 ui.use_office(office)
 r = ui.input({"t": "tap", "fx": 0.5, "fy": 0.25})
 tap = office.feel.last("Input.dispatchMouseEvent")
@@ -732,6 +743,15 @@ tap = browser.last("Input.dispatchMouseEvent")
 print("browser tap", tap["x"], tap["y"])
 print("office after switch", [m for m, _ in office.feel.calls[before:] if m.startswith("Input.")])
 
+# Office's email page reloads itself once soon after it opens; the box is
+# shown only once it has stayed loaded.
+o = bridge.Office(0, ":0")
+seq = iter([False, True, False, True, True, True])
+checks = []
+o.js = lambda _e: (checks.append(1), next(seq, True))[1]
+o.settle(time.time() + 10, quiet=0.3)
+print("settled after", len(checks), "checks")
+
 class NoWindow:
     def __init__(self, _display):
         pass
@@ -747,11 +767,13 @@ except bridge.CDPError as e:
     print("office wait", round(time.time() - start), e)
 PY
   [ "$status" -eq 0 ]
-  [[ $output == *"office tap 228.0 140.0 {'editable': True}"* ]]
+  [[ $output == *"office tap 456.0 280.0 {'editable': True}"* ]]
   [[ $output == *"input on the laid-out connection []"* ]]
   [[ $output == *"office card 456 560 False"* ]]
   [[ $output == *"office frame card 456 560"* ]]
   [[ $output == *"office laid out 1 time"* ]]
+  [[ $output == *"frame while starting None"* ]]
+  [[ $output == *"settled after 6 checks"* ]]
   [[ $output == *"browser tap 1440.0 900.0"* ]]
   [[ $output == *"office after switch []"* ]]
   [[ $output == *"office wait 1 Office's sign-in box did not open"* ]]
