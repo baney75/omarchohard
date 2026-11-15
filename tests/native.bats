@@ -636,6 +636,47 @@ PY
   [ "$(cat "$BATS_TEST_TMPDIR/got")" = 200 ]
 }
 
+@test "a slow Office navigation does not end the sign-in, and the bridge waits a minute for Office" {
+  # 2026-11-14: Word in swap took over 20 s to answer Page.navigate, and the
+  # whole sign-in died with "Page.navigate: no answer".
+  run python3 -I -B - "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" <<'PY'
+import importlib.util, json, sys, threading
+
+spec = importlib.util.spec_from_file_location("bridge", sys.argv[1])
+bridge = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bridge)
+print("SLOW", bridge.SLOW)
+
+def send(raw):
+    m = json.loads(raw)
+    url = m["params"].get("url", "")
+    if m["method"] == "Page.navigate" and url.endswith("/stuck"):
+        return  # Office in swap: no answer
+    reply = {"id": m["id"], "result": {}}
+    if url.endswith("/refused"):
+        reply = {"id": m["id"], "error": {"message": "Cannot navigate to invalid URL"}}
+    threading.Timer(0.01, cdp.feed, [json.dumps(reply)]).start()
+
+cdp = bridge.CDP(send)
+bridge.SLOW = 0.3
+office = bridge.Office(0, ":0")
+office.cdp = cdp
+office.start_url = "https://login.example/stuck"
+office.back_to_email()
+print("back to email: survived")
+try:
+    bridge.navigate(cdp.call, "https://login.example/refused")
+    print("refused: ignored")
+except bridge.CDPError as e:
+    print("refused: raised", e)
+PY
+  [ "$status" -eq 0 ]
+  [[ $output == *"SLOW 60"* ]]
+  [[ $output == *"Page.navigate: no answer in 0.3 s; still waiting for the page"* ]]
+  [[ $output == *"back to email: survived"* ]]
+  [[ $output == *"refused: raised Page.navigate: Cannot navigate to invalid URL"* ]]
+}
+
 @test "the bridge's page server answers only its session, and serves the page with a CSP" {
   run python3 -I -B - "$OH_REPO_ROOT/share/omarchohard/native-signin/bridge.py" <<'PY'
 import http.client, importlib.util, json, queue, socket, sys

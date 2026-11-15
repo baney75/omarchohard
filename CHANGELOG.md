@@ -98,6 +98,12 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- The native sign-in no longer ends when Word is slow to answer. On a busy
+  machine with Word in swap, one navigation in Office's sign-in window took
+  over 20 s and the whole sign-in stopped with "Page.navigate: no answer".
+  The bridge now waits up to a minute for Office and the browser, treats a
+  slow navigation as still loading, and logs each step to the journal.
+
 - `desktop wait` and `desktop apps` on a reinstalled VM: WinApps refused to
   set up over its own earlier install, so no apps were added. When it does,
   that install is removed and setup runs again.
