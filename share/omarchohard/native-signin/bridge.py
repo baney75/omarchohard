@@ -548,8 +548,11 @@ class Office:
         end = min(deadline, time.time() + 30)
         since = None
         while time.time() < end:
-            ok = self.js("(()=>{const ok=document.readyState==='complete'&&!!%s&&window.__ohSeen===1;"
-                         "window.__ohSeen=1;return ok})()" % self.FIELD)
+            try:
+                ok = self.js("(()=>{const ok=document.readyState==='complete'&&!!%s&&window.__ohSeen===1;"
+                             "window.__ohSeen=1;return ok})()" % self.FIELD)
+            except CDPError:
+                ok = False  # asked mid-reload
             if not ok:
                 since = None
             elif since is None:
@@ -818,7 +821,12 @@ class Remote:
         page has settled (one still starting up drops what was typed)."""
         ready = "document.readyState==='complete'&&!!" + Office.FIELD
         end = time.time() + 15
-        while not self.feel.call("Runtime.evaluate", {"expression": ready, "returnByValue": True}).get("result", {}).get("value"):
+        while True:
+            try:
+                if self.feel.call("Runtime.evaluate", {"expression": ready, "returnByValue": True}).get("result", {}).get("value"):
+                    break
+            except CDPError:
+                pass  # asked mid-reload
             if time.time() > end:
                 log("Office's email field did not appear; the address was not filled in")
                 return
@@ -833,6 +841,7 @@ class Remote:
         with self.lock:
             feel, self.feel = self.feel, None
             self.office, self.size, self.source = None, None, "browser"
+            self.k = (1.0, 1.0)  # Office's pointer scale is not the browser's
         if feel is not None and hasattr(feel, "sock"):
             try:
                 feel.sock.close()

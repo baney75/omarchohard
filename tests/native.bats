@@ -741,14 +741,24 @@ ui.use_browser()
 ui.input({"t": "tap", "fx": 1, "fy": 1})
 tap = browser.last("Input.dispatchMouseEvent")
 print("browser tap", tap["x"], tap["y"])
+ui.input({"t": "wheel", "fx": 1, "fy": 1, "dy": 100})
+wheel = browser.last("Input.dispatchMouseEvent")
+print("browser wheel", wheel["x"], wheel["y"])
 print("office after switch", [m for m, _ in office.feel.calls[before:] if m.startswith("Input.")])
 
 # Office's email page reloads itself once soon after it opens; the box is
 # shown only once it has stayed loaded.
 o = bridge.Office(0, ":0")
-seq = iter([False, True, False, True, True, True])
+# A check asked mid-reload fails; that is "not yet", not the end.
+seq = iter([False, True, None, True, True, True])
 checks = []
-o.js = lambda _e: (checks.append(1), next(seq, True))[1]
+def js(_e):
+    checks.append(1)
+    v = next(seq, True)
+    if v is None:
+        raise bridge.CDPError("Runtime.evaluate: Execution context was destroyed")
+    return v
+o.js = js
 o.settle(time.time() + 10, quiet=0.3)
 print("settled after", len(checks), "checks")
 
@@ -775,6 +785,7 @@ PY
   [[ $output == *"frame while starting None"* ]]
   [[ $output == *"settled after 6 checks"* ]]
   [[ $output == *"browser tap 1440.0 900.0"* ]]
+  [[ $output == *"browser wheel 1440.0 900.0"* ]]
   [[ $output == *"office after switch []"* ]]
   [[ $output == *"office wait 1 Office's sign-in box did not open"* ]]
 }
