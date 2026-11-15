@@ -102,7 +102,9 @@ builds are not listed; they carry the version of the next release plus a
   forever with "Try again" and the back arrow dead: the browser on the
   machine, which has no passkey, turns the request down at once, so
   Microsoft offers its other ways to sign in. Passkeys still work in the
-  local window.
+  local window. When Microsoft asks for a passkey, the page now says so at
+  the top: a passkey works only on the machine itself, so an account with
+  no other way to sign in runs `omarchohard native signin` there.
 
 - The remote sign-in page's pointer takes the shape it has on Microsoft's
   page: a hand over buttons and links, an I-beam in fields. Moving the mouse

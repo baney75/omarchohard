@@ -726,6 +726,10 @@ ui = bridge.Remote(browser, hub)
 # The browser here has no passkey: a passkey request must end at once.
 added = [p["source"] for m, p in browser.calls if m == "Page.addScriptToEvaluateOnNewDocument"]
 print("no passkey here", len(added), "NotAllowedError" in added[0] and "publicKey" in added[0])
+# The script tells the bridge, and the page then says to sign in on the device.
+named = [m for m, p in browser.calls if m in ("Runtime.enable", "Runtime.addBinding")]
+ui.passkey({"name": "ohPasskey", "payload": "asked"}, None)
+print("passkey notice", named, "ohPasskey" in added[0], hub.state.get("passkey"))
 ui.input({"t": "viewport", "w": 1440, "h": 900, "dpr": 2})
 # Before Office's box opens, the browser's blank page is never shown.
 ui.frame({"sessionId": 1, "data": "blank", "metadata": {"deviceWidth": 1440, "deviceHeight": 900}}, None)
@@ -792,6 +796,7 @@ PY
   [[ $output == *"office tap 456.0 280.0 {'editable': True}"* ]]
   [[ $output == *"input on the laid-out connection []"* ]]
   [[ $output == *"no passkey here 1 True"* ]]
+  [[ $output == *"passkey notice ['Runtime.enable', 'Runtime.addBinding'] True True"* ]]
   [[ $output == *"office hover 456.0 280.0 {'cursor': 'text'}"* ]]
   [[ $output == *"odd cursor {'cursor': 'default'}"* ]]
   [[ $output == *"office card 456 560 False"* ]]
