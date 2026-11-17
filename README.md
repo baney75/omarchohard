@@ -422,9 +422,17 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   `ssh:HOST`, an `https://` link, or a plain `http://` link on a private
   address together with `--sha256`, which is checked before the seed is
   used or kept. A seed for another plan's Office is refused.
-- **Opening.** Word's first window came up 5.7 s after a seeded install and
-  1.0 s when Wine was already running. Wine stays up for 10 minutes after
-  the last Office app closes. The apps are X11 windows through Xwayland.
+- **Opening.** Word's first window came up in 5.5 to 5.8 s with Wine
+  stopped, and in 2.0 to 2.2 s with Wine already running and Word closed
+  (on an idle machine). Wine stays up for 10 minutes after the last Office
+  app closes. The apps are X11 windows through Xwayland.
+- **Printers.** Office asks Linux's printing system (CUPS) for its printers
+  each time it starts, and CUPS spends a full second looking for network
+  printers. A windowless helper (`wscript.exe` running
+  `C:\omarchohard\printers.js`) asks once when Wine starts and keeps
+  Wine's answer, so later starts skip that second: Word's start with Wine
+  running went from 2.8 s to 2.0 s. It stops with Wine. A printer you add
+  while Wine runs shows in Office after Wine has stopped and started again.
 - **Fonts.** Office's interface uses Segoe UI, which is Windows' own.
   omarchohard puts Microsoft's open-source stand-in,
   [Selawik](https://github.com/microsoft/Selawik) (SIL Open Font License
@@ -486,10 +494,15 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
 - **Mail.** With native Office preferred and mail on, `mailto:` links open
   a new message in Outlook (`/c ipm.note /m`), or the web app when Outlook
   is not installed.
-- **Prewarm.** `omarchohard native prewarm on` keeps Wine's server and
-  services running from login (about 230 MB). Word's first start then
-  measured a median 4.3 s against 5.0 s cold (3 runs each), so it is off
-  unless you turn it on.
+- **Prewarm.** `omarchohard native prewarm on` starts Wine at login and
+  readies Office for its first start. The first Office app in a session
+  waits about 2 s while Click-to-Run sets the session up, so prewarm runs
+  Word's file converter once with no file, which pays that wait without a
+  window, and starts the printer helper. Word's first start after login
+  then measured 1.8 to 2.1 s, against 5.0 to 5.4 s with Wine's services
+  alone. It costs about 475 MB of memory (14 processes) and about 1% of
+  one core while idle, so it is off unless you turn it on
+  (`omarchohard native prewarm off` turns it off again).
 - **Macros.** omarchohard sets no macro policy: learn.microsoft.com
   documents no registry value for one that this could cite. Office's
   defaults apply. Its block on macros from the internet

@@ -1147,7 +1147,35 @@ oh_native_start() {
   mapfile -t env < <(oh_native_env)
   oh_native_box app
   oh_spawn "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/$exe" "$@"
+  oh_native_printers
   oh_native_idle_start
+}
+
+# Office asks Linux's printing system (CUPS) for its printers as it starts,
+# and CUPS spends a full second looking for network printers (cupsGetDests
+# took 1.01 s on a desktop with two printers). Wine asks once per session,
+# while a process that asked is still running. This windowless script asks
+# through WMI, which loads Wine's printer code, then sleeps, so every later
+# Office start skips that second: Word's warm start went from 2.8 s to 2.0 s.
+# It stops with the rest of Wine (oh_native_idle_watch), and a printer added
+# meanwhile shows in Office once Wine has started again.
+OH_NATIVE_PRINTERS='C:\omarchohard\printers.js'
+oh_native_printers() {
+  local js=$OH_NATIVE_PREFIX/drive_c/omarchohard/printers.js pid
+  local -a env
+  for pid in $(pgrep -u "$(id -u)" -x wscript.exe 2>/dev/null || true); do
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF -- "WINEPREFIX=$OH_NATIVE_PREFIX" || continue
+    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF 'printers.js' && return 0
+  done
+  if ! oh_dry && [[ ! -f $js ]]; then
+    mkdir -p "${js%/*}"
+    # Wine's JScript has no GetObject, so WMI comes through its locator.
+    printf '%s\r\n' 'var wmi = new ActiveXObject("WbemScripting.SWbemLocator").ConnectServer(".", "root\\cimv2");' \
+      'while (true) WScript.Sleep(86400000);' >"$js"
+  fi
+  mapfile -t env < <(oh_native_env)
+  oh_native_box app
+  oh_spawn "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" wscript.exe //B //Nologo "$OH_NATIVE_PRINTERS"
 }
 
 # The OneDrive folder as drive O: in Windows, when there is one.
@@ -1493,7 +1521,7 @@ oh_native_status() {
   printf 'office: %s\n' "${office_ver:-not installed}${product:+ $product, for $(oh_native_plan_words "$product") plans}${found[*]:+ (${found[*]})}"
   if [[ -n $seed ]]; then printf 'seed: %s (%s)%s%s\n' "$seed" "$(oh_native_size "$seed_bytes")" "$([[ $seed_old == true ]] && echo ", Office $seed_ver, older than the installed Office (devices installed from it update themselves)")" "$([[ $serving == true ]] && echo ', being served')"; else printf 'seed: none\n'; fi
   if [[ -n $office_ver ]]; then
-    printf 'updates: latest known %s%s; last result: %s; weekly check %s\n' "${latest:-not checked yet}" "${checked:+ (checked $checked)}" "${result:+$result ($result_at)}${result:-none yet}" "$([[ $timer == true ]] && echo on || echo 'off (omarchohard native install turns it on)')"
+    printf 'updates: latest known %s%s; last result: %s; weekly check %s\n' "${latest:-not checked yet}" "${checked:+ (checked $checked)}" "$([[ -n $result ]] && echo "$result ($result_at)" || echo 'none yet')" "$([[ $timer == true ]] && echo on || echo 'off (omarchohard native install turns it on)')"
     ! oh_native_newer "$latest" "$office_ver" || printf 'update available: Office %s (omarchohard native update)\n' "$latest"
   fi
   printf 'disk: wine %s, prefix and seed %s\n' "$(oh_native_size "${wine_bytes:-0}")" "$(oh_native_size "${native_bytes:-0}")"
@@ -1554,7 +1582,13 @@ EOF
 }
 
 # The unit's process: a persistent Wine server, Windows' services started
-# in the sandbox, then a wait on the server.
+# in the sandbox, the printer holder, then a wait on the server. The first
+# Office app in a session waits about 2 s while Click-to-Run sets the
+# session up, and a session that only has its services started still pays
+# that: Word's first start measured 5.0 to 5.4 s either way. Word's file
+# converter, run once with no file, pays it instead: it shows no window and
+# exits in 2 s (0.1 s once the session is set up). Word's first start after
+# login then measured 1.8 to 2.1 s.
 oh_native_prewarm_run() {
   local -a env
   oh_native_ready || oh_die "native Office is not set up"
@@ -1562,6 +1596,11 @@ oh_native_prewarm_run() {
   oh_native_ws_start -p
   oh_native_box app
   "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" cmd.exe /c exit >/dev/null 2>&1 || true
+  oh_native_printers
+  if [[ -f $OH_NATIVE_OFFICE/Wordconv.exe ]]; then
+    oh_native_box app
+    timeout 60 "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/Wordconv.exe" >/dev/null 2>&1 || true
+  fi
   oh_native_box tmp
   exec "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w
 }

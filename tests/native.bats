@@ -1138,6 +1138,13 @@ box_line() { grep -F -- "$1" "$HOME/bwrap.log" | tail -n1; }
   home=$(readlink -f "$HOME")
   grep -qF "Office16/WINWORD.EXE Z:${home//\//\\}\\notes.docx" "$HOME/wine.log"
   grep -qx -- '-p600' "$HOME/wineserver.log"
+  # The printer holder starts after Word, from a script in the prefix.
+  for _ in $(seq 50); do
+    grep -q wscript "$HOME/wine.log" && break
+    sleep 0.1
+  done
+  grep -qxF 'wscript.exe //B //Nologo C:\omarchohard\printers.js' "$HOME/wine.log"
+  grep -qF 'SWbemLocator").ConnectServer(".", "root\\cimv2");' "$PREFIX/drive_c/omarchohard/printers.js"
   [[ $output != *"opens a copy"* ]]
   [ ! -e "$HOME/bwrap.log" ]
   [ ! -e "$HOME/notify.log" ]
@@ -1200,9 +1207,18 @@ box_line() { grep -F -- "$1" "$HOME/bwrap.log" | tail -n1; }
   # Stopping the unit must not take open Office apps with it.
   grep -qx 'KillMode=process' "$unit"
   grep -qx -- '--user enable --now omarchohard-native-prewarm.service' "$HOME/systemctl.log"
+  : >"$OFFICE/Wordconv.exe"
   run "$OH" native prewarm-run
   [ "$status" -eq 0 ]
-  grep -qx 'cmd.exe /c exit' "$HOME/wine.log"
+  [ "$(head -n1 "$HOME/wine.log")" = 'cmd.exe /c exit' ]
+  # The printer holder, then Word's converter with no file, which sets up
+  # Click-to-Run's session so Word's first start is a warm one.
+  for _ in $(seq 50); do
+    grep -q wscript "$HOME/wine.log" && break
+    sleep 0.1
+  done
+  grep -qxF 'wscript.exe //B //Nologo C:\omarchohard\printers.js' "$HOME/wine.log"
+  [ "$(grep -c 'Office16/Wordconv.exe$' "$HOME/wine.log")" -eq 1 ]
   [ "$(head -n1 "$HOME/wineserver.log")" = -p ]
   [ "$(tail -n1 "$HOME/wineserver.log")" = -w ]
   # The persistent server starts in the apps' sandbox.
@@ -1295,6 +1311,9 @@ esac'
   [ "$(jq -r .update.result <<<"$output")" = "updated to 16.0.20600.20010" ]
   [ "$(jq -r .seed.version <<<"$output")" = 16.0.20527.20196 ]
   [ "$(jq -r .seed.older_than_office <<<"$output")" = true ]
+  run "$OH" native status
+  [[ $output == *"last result: updated to 16.0.20600.20010 ("*"); weekly check"* ]]
+  [ "$(grep -o 'updated to 16.0.20600.20010' <<<"$output" | wc -l)" -eq 1 ]
 }
 
 @test "native update waits while an Office app is open, and the timer's run asks Microsoft at most once in 6 days" {
