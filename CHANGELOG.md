@@ -17,7 +17,7 @@ builds are not listed; they carry the version of the next release plus a
   before sign-in; every other device copies a seed with `--from` (a file,
   `ssh:HOST`, an `https://` link, or a private `http://` link with
   `--sha256`): 21 s from a file and 32 s from a link on one machine.
-  Word opened in 5.7 s cold and 1.0 s warm.
+  Word opened in 5.7 s cold and 2.0 s with Wine running.
 - `--plan personal|family|school|business|enterprise` picks the Office
   product, and a seed for another product is refused. `--shared-computer`
   turns on shared computer activation for school and enterprise plans.
@@ -87,6 +87,16 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Changed
 
+- Native Office starts faster. Office asks Linux's printing system for its
+  printers on every start, and that took a full second; a windowless helper
+  now asks once per Wine session and stays up, so later starts skip it.
+  Word's warm start went from 2.8 s to 2.0 s. A printer added while Wine
+  runs shows in Office after Wine has stopped and started again.
+- `omarchohard native prewarm on` now also sets up Click-to-Run's session
+  at login, by running Word's file converter once with no file. Word's
+  first start after login measured 1.8 to 2.1 s, against 5.0 to 5.4 s
+  with the old prewarm. It costs about 475 MB of memory and stays off
+  unless you turn it on.
 - The desktop VM downloads the Windows image over 16 connections
   (dockur's `CONNECTIONS`), up from dockur's default of 4.
 - OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files no
@@ -98,6 +108,7 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- `omarchohard native status` printed the last update result twice.
 - On the remote sign-in page, Microsoft's passkey step no longer spins
   forever with "Try again" and the back arrow dead: the browser on the
   machine, which has no passkey, turns the request down at once, so
