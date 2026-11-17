@@ -505,7 +505,10 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   appeared in 1.1 to 1.2 s, against 1.8 to 2.1 s for a normal start with
   Wine warm. After you close a document that
   Word stays, hidden, for the next one; once the system has swapped it out,
-  its next start is slower, about 1.5 s. Prewarm costs about 475 MB of
+  its next start is slower, about 1.5 s. That Word was started the way
+  Office starts Word for other programs, and whether Word add-ins and
+  startup macros load in it as in a normal start is untested; turn
+  prewarm off if you rely on them. Prewarm costs about 475 MB of
   memory (14 processes) for Wine plus about 560 MB for the hidden Word,
   and about 1% of one core while idle, so it is off unless you turn it on
   (`omarchohard native prewarm off` turns it off again).

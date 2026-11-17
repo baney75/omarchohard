@@ -1309,7 +1309,9 @@ oh_native_idle_watch() {
     done
     # A resident Word left from prewarm is closed as a person closes it;
     # one that will not close keeps Wine up for another round.
-    oh_native_resident_close && break
+    # Checked again after the close: a file opened while it ran starts a
+    # Word of its own, and Wine must not stop under it.
+    if oh_native_resident_close && ! oh_native_prewarm_on && ! oh_native_signin_running && [[ -z $(oh_native_app_pids) ]]; then break; fi
     idle=0
     sleep "$step"
   done
@@ -1715,27 +1717,32 @@ oh_native_prewarm_run() {
 # sign-in and the idle watcher close it (oh_native_resident_close). One loop
 # per user, held by its lock.
 oh_native_resident_keep() {
-  local step=${OMARCHOHARD_NATIVE_RESIDENT_STEP:-20} lk
+  local step=${OMARCHOHARD_NATIVE_RESIDENT_STEP:-20} lk il
   local -a env
   mkdir -p "$OH_STATE_DIR"
   exec {lk}>"$OH_STATE_DIR/native-resident.lock"
   flock -n "$lk" || return 0
   while oh_native_prewarm_on; do
-    if oh_native_resident_wanted; then
+    # The install lock is held until Word has been started, so an install
+    # or update that takes it next finds that Word and closes it.
+    exec {il}>"$OH_STATE_DIR/native-install.lock"
+    if flock -n "$il" && oh_native_resident_wanted; then
       mapfile -t env < <(oh_native_env)
       oh_native_box app
-      # Without the loop's lock: Word outlives the loop.
-      oh_spawn "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" /Automation -Embedding {lk}>&- || true
+      # Without either lock: Word outlives the loop.
+      oh_spawn "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" /Automation -Embedding {lk}>&- {il}>&- || true
     fi
+    exec {il}>&-
     sleep "$step"
   done
 }
 
-# Whether the loop may start a resident Word now. It needs a screen for the
-# windows it is handed.
+# Whether the loop may start a resident Word now (it holds the install
+# lock). It needs a screen for the windows it is handed, and python for the
+# check that it is idle: without that check it would count as open for good.
 oh_native_resident_wanted() {
   [[ ${OMARCHOHARD_NATIVE_RESIDENT:-1} != 0 && -n ${DISPLAY:-} ]] && oh_native_ready || return 1
-  flock -n "$OH_STATE_DIR/native-install.lock" true 2>/dev/null || return 1
+  [[ -n ${OMARCHOHARD_NATIVE_WORDWIN:-} ]] || oh_native_python >/dev/null || return 1
   ! oh_native_signin_running || return 1
   [[ -z $(oh_native_word_pids) ]]
 }
