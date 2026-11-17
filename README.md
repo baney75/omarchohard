@@ -500,8 +500,14 @@ Measured on Parish1 (Omarchy, Hyprland, btrfs), 2026-11-13:
   Word's file converter once with no file, which pays that wait without a
   window, and starts the printer helper. Word's first start after login
   then measured 1.8 to 2.1 s, against 5.0 to 5.4 s with Wine's services
-  alone. It costs about 475 MB of memory (14 processes) and about 1% of
-  one core while idle, so it is off unless you turn it on
+  alone. Prewarm also keeps one hidden Word running for launches to hand
+  off to: through `omarchohard native run word`, Word's window then
+  appeared in 1.1 to 1.2 s, against 1.8 to 2.1 s for a normal start with
+  Wine warm. After you close a document that
+  Word stays, hidden, for the next one; once the system has swapped it out,
+  its next start is slower, about 1.5 s. Prewarm costs about 475 MB of
+  memory (14 processes) for Wine plus about 560 MB for the hidden Word,
+  and about 1% of one core while idle, so it is off unless you turn it on
   (`omarchohard native prewarm off` turns it off again).
 - **Macros.** omarchohard sets no macro policy: learn.microsoft.com
   documents no registry value for one that this could cite. Office's

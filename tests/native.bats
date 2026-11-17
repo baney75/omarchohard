@@ -28,6 +28,12 @@ sandbox_on() { export OMARCHOHARD_NATIVE_SANDBOX=1; }
 
 teardown() {
   [ -z "${FAKE_APP:-}" ] || kill "$FAKE_APP" 2>/dev/null || true
+  # A resident Word's keep loop ends once prewarm is off; then its Words go.
+  if [ -e "$XDG_STATE_HOME/omarchohard/native-resident.lock" ]; then
+    rm -f "$XDG_CONFIG_HOME/systemd/user/omarchohard-native-prewarm.service"
+    keep_ended || true
+  fi
+  [ ! -f "$HOME/resident.pids" ] || xargs -r kill <"$HOME/resident.pids" 2>/dev/null || true
 }
 
 # A wine-altars tree whose wine and wineserver only log their arguments.
@@ -1383,4 +1389,183 @@ fake_server() {
   [ "$(head -n1 "$HOME/wineserver.log")" = -k ]
   grep -qF 'setup.exe /configure Z:' "$HOME/wine.log"
   [ "$(grep -n -- '--user stop omarchohard-native-prewarm.service' "$HOME/systemctl.log" | cut -d: -f1)" -lt "$(grep -n -- '--user start omarchohard-native-prewarm.service' "$HOME/systemctl.log" | cut -d: -f1)" ]
+}
+
+# Resident Word. A wine that, asked for Word as COM starts it, becomes a
+# process that looks like it (its pid in ~/resident.pids), and that ends
+# those on `taskkill /im WINWORD.EXE` unless ~/stubborn exists, as a Word
+# that will not close. Every call still goes through the wine before it.
+# The window check is a stub: ~/wordwin holds its exit (0 a document is
+# open, 1 none, 2 unknown). Prewarm counts as on while its unit file exists.
+resident_stubs() {
+  [ -e "$WINE/bin/wine-base" ] || mv "$WINE/bin/wine" "$WINE/bin/wine-base"
+  # shellcheck disable=SC2016 # expanded by the stub
+  printf '%s\n' '#!/bin/sh' '"$(dirname "$0")/wine-base" "$@"' 'case "$*" in' \
+    '*" /Automation -Embedding")' \
+    '  echo $$ >>"$HOME/resident.pids"' \
+    "  exec sh -c 'while :; do sleep 0.2; done' \"\$@\" ;;" \
+    '"taskkill /im WINWORD.EXE") [ -e "$HOME/stubborn" ] || xargs -r kill <"$HOME/resident.pids" 2>/dev/null ;;' \
+    'esac' 'exit 0' >"$WINE/bin/wine"
+  chmod +x "$WINE/bin/wine"
+  # shellcheck disable=SC2016
+  stub wordwin 'exit "$(cat "$HOME/wordwin" 2>/dev/null || echo 2)"'
+  export OMARCHOHARD_NATIVE_WORDWIN=$STUBS/wordwin
+  printf '1\n' >"$HOME/wordwin"
+  # shellcheck disable=SC2016
+  stub systemctl 'printf "%s\n" "$*" >>"$HOME/systemctl.log"
+case " $* " in
+*" is-active "*omarchohard-native-prewarm*) [ -f "$XDG_CONFIG_HOME/systemd/user/omarchohard-native-prewarm.service" ] && exit 0; exit 3 ;;
+*" is-active "*) exit 3 ;;
+esac
+exit 0'
+  export OMARCHOHARD_NATIVE_RESIDENT_STEP=0.2 OMARCHOHARD_NATIVE_RESIDENT_WAIT=1
+}
+
+# A resident Word started by hand, idle or not as ~/wordwin says.
+fake_resident() {
+  WINEPREFIX=$PREFIX sh -c 'while :; do sleep 0.2; done' "$OFFICE/WINWORD.EXE" /Automation -Embedding &
+  printf '%s\n' "$!" >>"$HOME/resident.pids"
+  sleep 0.3
+}
+
+# wait_for PATTERN FILE: up to 10 s for a line matching PATTERN.
+wait_for() {
+  for _ in $(seq 100); do
+    grep -qE -- "$1" "$2" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# Up to 10 s for the keep loop to end, which frees its lock.
+keep_ended() {
+  for _ in $(seq 100); do
+    flock -n "$XDG_STATE_HOME/omarchohard/native-resident.lock" true && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+embedded() { grep -c 'Office16/WINWORD.EXE /Automation -Embedding$' "$HOME/wine.log" || true; }
+
+@test "prewarm keeps one hidden Word for launches to hand off to, and stops keeping it once prewarm is off" {
+  fake_installed
+  resident_stubs
+  run "$OH" native prewarm on
+  [ "$status" -eq 0 ]
+  DISPLAY=:9 run "$OH" native prewarm-run
+  [ "$status" -eq 0 ]
+  wait_for 'Office16/WINWORD.EXE /Automation -Embedding$' "$HOME/wine.log"
+  # Several passes later still one: a Word of this prefix is running.
+  sleep 1
+  [ "$(embedded)" -eq 1 ]
+  run "$OH" native prewarm off
+  [ "$status" -eq 0 ]
+  keep_ended
+  # The loop has ended without its lock staying held by Word, and Word is
+  # left running: it is closed only as a person closes it.
+  kill -0 "$(head -n1 "$HOME/resident.pids")"
+  xargs -r kill <"$HOME/resident.pids"
+  sleep 0.6
+  [ "$(embedded)" -eq 1 ]
+}
+
+@test "prewarm starts no hidden Word while Office is installing or updating, or while a Word is open" {
+  fake_installed
+  resident_stubs
+  run "$OH" native prewarm on
+  mkdir -p "$XDG_STATE_HOME/omarchohard"
+  # shellcheck disable=SC2016 # expanded by the inner sh
+  flock "$XDG_STATE_HOME/omarchohard/native-install.lock" sh -c 'while [ ! -e "$HOME/release" ]; do sleep 0.1; done' &
+  WINEPREFIX=$PREFIX sh -c 'while :; do sleep 0.2; done' "$OFFICE/WINWORD.EXE" &
+  FAKE_APP=$!
+  sleep 0.3
+  DISPLAY=:9 run "$OH" native prewarm-run
+  [ "$status" -eq 0 ]
+  sleep 1
+  [ "$(embedded)" -eq 0 ]
+  : >"$HOME/release"
+  sleep 1
+  [ "$(embedded)" -eq 0 ]
+  kill "$FAKE_APP"
+  FAKE_APP=''
+  wait_for 'Office16/WINWORD.EXE /Automation -Embedding$' "$HOME/wine.log"
+  [ "$(embedded)" -eq 1 ]
+}
+
+@test "native update closes an idle hidden Word as a person closes Word, and waits for one showing a document" {
+  fake_installed
+  cdn_and_odt 16.0.20600.20010
+  resident_stubs
+  fake_resident
+  # A document open, or windows that cannot be read: Office is open.
+  for rc in 0 2; do
+    printf '%s\n' "$rc" >"$HOME/wordwin"
+    run "$OH" native update
+    [ "$status" -eq 1 ]
+    [[ $output == *"close Word, Excel, PowerPoint, Outlook and OneNote first"* ]]
+  done
+  run grep -qs -e taskkill -e configure "$HOME/wine.log"
+  [ "$status" -ne 0 ]
+  printf '1\n' >"$HOME/wordwin"
+  run "$OH" native update
+  [ "$status" -eq 0 ]
+  [[ $output == *"Office updated to 16.0.20600.20010"* ]]
+  # Closed without /f, before setup.exe ran.
+  [ "$(grep -c taskkill "$HOME/wine.log")" -eq 1 ]
+  [ "$(grep -n taskkill "$HOME/wine.log" | cut -d: -f1)" -lt "$(grep -n '/configure ' "$HOME/wine.log" | cut -d: -f1)" ]
+  grep -qx 'taskkill /im WINWORD.EXE' "$HOME/wine.log"
+}
+
+@test "native update waits for a hidden Word that will not close" {
+  fake_installed
+  cdn_and_odt 16.0.20600.20010
+  resident_stubs
+  fake_resident
+  : >"$HOME/stubborn"
+  run "$OH" native update --auto
+  [ "$status" -eq 0 ]
+  grep -qx 'taskkill /im WINWORD.EXE' "$HOME/wine.log"
+  run "$OH" native status --json
+  [ "$(jq -r .update.result <<<"$output")" = "skipped: Office was open (16.0.20600.20010 is waiting)" ]
+  run "$OH" native update
+  [ "$status" -eq 1 ]
+  [[ $output == *"close Word, Excel, PowerPoint, Outlook and OneNote first"* ]]
+  run grep -qs configure "$HOME/wine.log"
+  [ "$status" -ne 0 ]
+}
+
+@test "the idle watcher closes a hidden Word before it stops Wine, and keeps Wine up while one will not close" {
+  fake_installed
+  resident_stubs
+  export OMARCHOHARD_NATIVE_IDLE=0 OMARCHOHARD_NATIVE_IDLE_STEP=1
+  fake_resident
+  : >"$HOME/stubborn"
+  run timeout 4 "$OH" native idle-watch
+  [ "$status" -eq 124 ]
+  grep -qx 'taskkill /im WINWORD.EXE' "$HOME/wine.log"
+  run grep -qsx -- -k "$HOME/wineserver.log"
+  [ "$status" -ne 0 ]
+  rm -f "$HOME/stubborn" "$HOME/wine.log"
+  run "$OH" native idle-watch
+  [ "$status" -eq 0 ]
+  grep -qx 'taskkill /im WINWORD.EXE' "$HOME/wine.log"
+  grep -qx -- -k "$HOME/wineserver.log"
+}
+
+@test "the sign-in closes a hidden Word first, so Office's own Word cannot hand off to it" {
+  signin_stubs
+  fake_installed
+  resident_stubs
+  fake_resident
+  : >"$HOME/stubborn"
+  run "$OH" native signin
+  [ "$status" -eq 1 ]
+  [[ $output == *"close Word, Excel, PowerPoint, Outlook and OneNote first; the sign-in starts Office on its own"* ]]
+  [ ! -e "$HOME/systemd-run.log" ]
+  rm -f "$HOME/stubborn" "$HOME/wine.log"
+  run "$OH" native signin
+  [ "$status" -eq 0 ]
+  grep -qx 'taskkill /im WINWORD.EXE' "$HOME/wine.log"
+  grep -qx 'signin-run' "$HOME/systemd-run.log"
 }
