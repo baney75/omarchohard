@@ -114,6 +114,8 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- The hidden Word that prewarm keeps is seen as idle under Wine's Wayland
+  driver too, so updates and sign-in no longer wait on it as an open app.
 - Prewarm no longer fails after a restart: it keeps the Wine server the
   last run left up instead of starting a second one, which Wine refuses.
 - `omarchohard native status` printed the last update result twice.

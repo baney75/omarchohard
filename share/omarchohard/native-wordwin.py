@@ -11,16 +11,47 @@
 # which goes when the document closes. Wine's tasklist shows no titles, so
 # this asks the X server: winex11 sets _NET_WM_PID to the Unix pid.
 #
-# Run with python3 -I. Reads only PID's environment (for DISPLAY and
-# XAUTHORITY) and the X server's window tree.
+# Under Wine's Wayland driver (which Wine falls back to when no X server
+# answers) Word's windows are not X windows. A hidden window is no Wayland
+# window at all, so there this asks Hyprland: any window of PID is in use,
+# none is idle.
+#
+# Run with python3 -I. Reads only PID's environment (for DISPLAY,
+# XAUTHORITY and Hyprland's socket), PID's mapped libraries, and the X
+# server's window tree or Hyprland's window list.
 import ctypes
 import ctypes.util
+import json
 import os
 import re
+import socket
 import sys
 
 WORD_TITLE = re.compile(r"\s-\s(Microsoft\s)?Word$")
 XA_CARDINAL = 6
+
+
+def wayland_driver(pid):
+    with open(f"/proc/{pid}/maps", encoding="utf-8", errors="replace") as f:
+        return any(line.rstrip().endswith("/winewayland.so") for line in f)
+
+
+def hyprland_window(pid, env):
+    run, sig = env.get("XDG_RUNTIME_DIR"), env.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not run or not sig:
+        return 2
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5)
+    s.connect(os.path.join(run, "hypr", sig, ".socket.sock"))
+    s.sendall(b"j/clients")
+    data = b""
+    while chunk := s.recv(65536):
+        data += chunk
+    s.close()
+    clients = json.loads(data)
+    if not isinstance(clients, list):
+        return 2
+    return 0 if any(isinstance(c, dict) and c.get("pid") == pid for c in clients) else 1
 
 
 def word_window(pid):
@@ -30,6 +61,8 @@ def word_window(pid):
     except OSError:
         return 2
     env = dict(item.split("=", 1) for item in raw.split("\0") if "=" in item)
+    if wayland_driver(pid):
+        return hyprland_window(pid, env)
     if not env.get("DISPLAY"):
         return 2
     if env.get("XAUTHORITY"):
