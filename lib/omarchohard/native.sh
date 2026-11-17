@@ -1688,7 +1688,10 @@ oh_native_prewarm_run() {
   local -a env
   oh_native_ready || oh_die "native Office is not set up"
   mapfile -t env < <(oh_native_env)
-  oh_native_ws_start -p
+  # The unit stops only its main process (KillMode=process), so after a
+  # restart the last run's server is still up, and a second -p server
+  # refuses to start (exit 2). Keep that one and wait on it instead.
+  [[ -n $(oh_native_server_pids) ]] || oh_native_ws_start -p
   oh_native_box app
   "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" cmd.exe /c exit >/dev/null 2>&1 || true
   oh_native_printers

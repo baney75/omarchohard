@@ -114,6 +114,8 @@ builds are not listed; they carry the version of the next release plus a
 
 ### Fixed
 
+- Prewarm no longer fails after a restart: it keeps the Wine server the
+  last run left up instead of starting a second one, which Wine refuses.
 - `omarchohard native status` printed the last update result twice.
 - On the remote sign-in page, Microsoft's passkey step no longer spins
   forever with "Try again" and the back arrow dead: the browser on the

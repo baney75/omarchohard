@@ -1236,6 +1236,22 @@ box_line() { grep -F -- "$1" "$HOME/bwrap.log" | tail -n1; }
   grep -qx -- '--user disable --now omarchohard-native-prewarm.service' "$HOME/systemctl.log"
 }
 
+@test "prewarm-run after a restart keeps the Wine server still running instead of failing to start a second" {
+  fake_installed
+  run "$OH" native prewarm on
+  [ "$status" -eq 0 ]
+  fake_server
+  # Like the real one: a second server for the prefix exits 2.
+  # shellcheck disable=SC2016 # expanded by the stub
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$HOME/wineserver.log"\n[ "$1" = -p ] && exit 2\nexit 0\n' >"$WINE/bin/wineserver"
+  OMARCHOHARD_NATIVE_RESIDENT=0 run "$OH" native prewarm-run
+  kill "$FAKE_APP" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  run grep -qx -- -p "$HOME/wineserver.log"
+  [ "$status" -ne 0 ]
+  [ "$(tail -n1 "$HOME/wineserver.log")" = -w ]
+}
+
 @test "with open_with=native and mail on, mailto links open a new message in Outlook; with mail=0 the web app" {
   fake_installed
   : >"$OFFICE/OUTLOOK.EXE"
