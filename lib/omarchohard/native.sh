@@ -1061,15 +1061,94 @@ oh_native_seed_serve() {
 }
 
 # Office processes of this prefix (another prefix's Word, in a container
-# say, is not ours). One pid per line.
-oh_native_app_pids() {
-  local pid env
+# say, is not ours), PATTERN picking the apps. Prints "PID CMDLINE" lines.
+oh_native_office_procs() {
+  local pattern=$1 pid env cmd
   for pid in $(pgrep -u "$(id -u)" -f '\.(EXE|exe)( |$)' 2>/dev/null || true); do
     env=$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null) || continue
     grep -qxF -- "WINEPREFIX=$OH_NATIVE_PREFIX" <<<"$env" || continue
-    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qE '[\\/]Office16[\\/](WINWORD|EXCEL|POWERPNT|OUTLOOK|ONENOTE)\.EXE' && printf '%s\n' "$pid"
+    cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) || continue
+    grep -qE "[\\/]Office16[\\/]($pattern)\.EXE" <<<"$cmd" && printf '%s %s\n' "$pid" "$cmd"
   done
   return 0
+}
+
+# A Word started for others to hand off to: COM starts it with -Embedding.
+oh_native_resident_cmd() {
+  local word='[\/]Office16[\/]WINWORD\.EXE'
+  [[ " $1 " == *' -Embedding '* && $1 =~ $word ]]
+}
+
+# Office processes in use. A hidden resident Word with no document is not:
+# it is there only to be handed the next launch. One pid per line.
+oh_native_app_pids() {
+  local pid cmd
+  while read -r pid cmd; do
+    [[ -n $pid ]] || continue
+    if oh_native_resident_cmd "$cmd" && oh_native_resident_idle "$pid"; then continue; fi
+    printf '%s\n' "$pid"
+  done < <(oh_native_office_procs 'WINWORD|EXCEL|POWERPNT|OUTLOOK|ONENOTE')
+  return 0
+}
+
+# Every Word of this prefix, resident or not. One pid per line.
+oh_native_word_pids() {
+  local pid cmd
+  while read -r pid cmd; do
+    [[ -z $pid ]] || printf '%s\n' "$pid"
+  done < <(oh_native_office_procs WINWORD)
+  return 0
+}
+
+# Resident Words of this prefix (oh_native_resident_keep), in use or not.
+oh_native_resident_pids() {
+  local pid cmd
+  while read -r pid cmd; do
+    [[ -n $pid ]] && oh_native_resident_cmd "$cmd" && printf '%s\n' "$pid"
+  done < <(oh_native_office_procs WINWORD)
+  return 0
+}
+
+# Whether resident Word PID holds no document. Its X windows say so
+# (share/omarchohard/native-wordwin.py, or the command in
+# OMARCHOHARD_NATIVE_WORDWIN). Only a clear "no Word window" counts: no
+# python, no display or an error means in use, so a document is never
+# closed under someone.
+oh_native_resident_idle() {
+  local py rc=0
+  if [[ -n ${OMARCHOHARD_NATIVE_WORDWIN:-} ]]; then
+    "$OMARCHOHARD_NATIVE_WORDWIN" "$1" >/dev/null 2>&1 || rc=$?
+  else
+    py=$(oh_native_python) || return 1
+    timeout 10 "$py" -I "$OH_SHARE/native-wordwin.py" "$1" >/dev/null 2>&1 || rc=$?
+  fi
+  ((rc == 1))
+}
+
+# Close the resident Words when nothing else of Office is in use: Word is
+# asked to close as a person closes it (taskkill without /f) and given
+# OMARCHOHARD_NATIVE_RESIDENT_WAIT seconds (15). An idle one exits in about
+# 2.5 s. Returns 1 while one is still running or Office is in use, and then
+# sends nothing.
+oh_native_resident_close() {
+  local i wait=${OMARCHOHARD_NATIVE_RESIDENT_WAIT:-15} pid now left
+  local -a pids
+  mapfile -t pids < <(oh_native_resident_pids)
+  ((${#pids[@]})) || return 0
+  [[ -z $(oh_native_app_pids) ]] || return 1
+  oh_native_wine taskkill /im WINWORD.EXE >/dev/null 2>&1 || true
+  oh_dry && return 0
+  for ((i = 0; i <= wait * 5; i++)); do
+    # Listed again, not kill -0: an exited Word not yet reaped would count.
+    now=" $(oh_native_resident_pids | paste -sd ' ') "
+    left=0
+    for pid in "${pids[@]}"; do
+      [[ $now != *" $pid "* ]] || left=1
+    done
+    ((left)) || return 0
+    ((i == wait * 5)) || sleep 0.2
+  done
+  return 1
 }
 
 oh_native_run() {
@@ -1221,9 +1300,20 @@ oh_native_idle_watch() {
   mkdir -p "$OH_STATE_DIR"
   exec {lk}>"$OH_STATE_DIR/native-idle.lock"
   flock -n "$lk" || return 0
-  while ((idle < limit)); do
+  while :; do
+    while ((idle < limit)); do
+      sleep "$step"
+      # Prewarm first: it is one systemctl call, and the Office check may
+      # ask the X server about a resident Word.
+      if oh_native_prewarm_on || oh_native_signin_running || [[ -n $(oh_native_app_pids) ]]; then idle=0; else idle=$((idle + step)); fi
+    done
+    # A resident Word left from prewarm is closed as a person closes it;
+    # one that will not close keeps Wine up for another round.
+    # Checked again after the close: a file opened while it ran starts a
+    # Word of its own, and Wine must not stop under it.
+    if oh_native_resident_close && ! oh_native_prewarm_on && ! oh_native_signin_running && [[ -z $(oh_native_app_pids) ]]; then break; fi
+    idle=0
     sleep "$step"
-    if [[ -n $(oh_native_app_pids) ]] || oh_native_signin_running || oh_native_prewarm_on; then idle=0; else idle=$((idle + step)); fi
   done
   oh_native_stop_wine
 }
@@ -1304,6 +1394,9 @@ oh_native_signin_needs() {
   ((remote)) || [[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]] ||
     oh_die "there is no screen here for the sign-in window; sign in from another device: omarchohard native signin --remote"
   ! oh_native_signin_running || oh_die "a sign-in is already running; stop it with: omarchohard native signin --stop"
+  # A resident Word goes first: the sign-in's own Word would hand off to it,
+  # on this screen instead of the hidden one.
+  oh_native_resident_close || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first; the sign-in starts Office on its own"
   [[ -z $(oh_native_app_pids) ]] || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first; the sign-in starts Office on its own"
 }
 
@@ -1564,7 +1657,7 @@ WantedBy=graphical-session.target
 EOF
     oh_run systemctl --user daemon-reload
     oh_run systemctl --user enable --now "$OH_NATIVE_PREWARM"
-    oh_ok "native prewarm on (the Wine server and its services stay resident)"
+    oh_ok "native prewarm on (the Wine server, its services and a hidden Word stay resident)"
     ;;
   off)
     if [[ -f $OH_UNIT_DIR/$OH_NATIVE_PREWARM ]]; then
@@ -1588,7 +1681,9 @@ EOF
 # that: Word's first start measured 5.0 to 5.4 s either way. Word's file
 # converter, run once with no file, pays it instead: it shows no window and
 # exits in 2 s (0.1 s once the session is set up). Word's first start after
-# login then measured 1.8 to 2.1 s.
+# login then measured 1.8 to 2.1 s. Last, a hidden Word stays resident for
+# launches to hand off to (oh_native_resident_keep), and the unit waits on
+# the server.
 oh_native_prewarm_run() {
   local -a env
   oh_native_ready || oh_die "native Office is not set up"
@@ -1601,8 +1696,55 @@ oh_native_prewarm_run() {
     oh_native_box app
     timeout 60 "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/Wordconv.exe" >/dev/null 2>&1 || true
   fi
+  # In the background, so the exec below does not end it.
+  oh_native_resident_keep </dev/null >/dev/null 2>&1 &
   oh_native_box tmp
   exec "${OH_BOX[@]}" env "WINEPREFIX=$OH_NATIVE_PREFIX" "$OH_WINESERVER" -w
+}
+
+# The resident Word. Word started as COM starts it (/Automation -Embedding)
+# shows no window and stays running, and a later WINWORD.EXE hands its file
+# to it and exits. Word's window then appeared in 0.93 to 0.99 s, against
+# 1.5 to 1.9 s for a normal start with Wine already warm. It costs about
+# 560 MB of memory, and once the system has swapped it out its first
+# handoff is slower, about 1.5 s. When its document closes it stays, idle
+# again, for the next launch.
+#
+# This loop keeps one while prewarm is on, checking every
+# OMARCHOHARD_NATIVE_RESIDENT_STEP seconds (20). It starts one only when no
+# Word of this prefix runs at all, and never during an install or update, a
+# sign-in, or with OMARCHOHARD_NATIVE_RESIDENT=0. It never stops one: update,
+# sign-in and the idle watcher close it (oh_native_resident_close). One loop
+# per user, held by its lock.
+oh_native_resident_keep() {
+  local step=${OMARCHOHARD_NATIVE_RESIDENT_STEP:-20} lk il
+  local -a env
+  mkdir -p "$OH_STATE_DIR"
+  exec {lk}>"$OH_STATE_DIR/native-resident.lock"
+  flock -n "$lk" || return 0
+  while oh_native_prewarm_on; do
+    # The install lock is held until Word has been started, so an install
+    # or update that takes it next finds that Word and closes it.
+    exec {il}>"$OH_STATE_DIR/native-install.lock"
+    if flock -n "$il" && oh_native_resident_wanted; then
+      mapfile -t env < <(oh_native_env)
+      oh_native_box app
+      # Without either lock: Word outlives the loop.
+      oh_spawn "${OH_BOX[@]}" env "${env[@]}" "$OH_WINE" "$OH_NATIVE_OFFICE/WINWORD.EXE" /Automation -Embedding {lk}>&- {il}>&- || true
+    fi
+    exec {il}>&-
+    sleep "$step"
+  done
+}
+
+# Whether the loop may start a resident Word now (it holds the install
+# lock). It needs a screen for the windows it is handed, and python for the
+# check that it is idle: without that check it would count as open for good.
+oh_native_resident_wanted() {
+  [[ ${OMARCHOHARD_NATIVE_RESIDENT:-1} != 0 && -n ${DISPLAY:-} ]] && oh_native_ready || return 1
+  [[ -n ${OMARCHOHARD_NATIVE_WORDWIN:-} ]] || oh_native_python >/dev/null || return 1
+  ! oh_native_signin_running || return 1
+  [[ -z $(oh_native_word_pids) ]]
 }
 
 # Updates. The ODT configuration turns Office's own updater off (it does
@@ -1715,6 +1857,14 @@ oh_native_update() {
   oh_office_prefetch_usable || oh_die "an update needs curl, bsdtar and flock, and $OH_NATIVE_DIR under your home folder"
   umask 077
   oh_native_lock native-install
+  # A hidden resident Word from prewarm is closed now, under the lock, so
+  # prewarm starts no other; one holding a document counts as open above.
+  if ! oh_native_resident_close; then
+    [[ $mode == auto ]] || oh_die "close Word, Excel, PowerPoint, Outlook and OneNote first (and any remote sign-in); Office updates while none is open"
+    oh_native_update_result "skipped: Office was open ($latest is waiting)"
+    oh_say "native update: Office is open; $latest waits for the next try"
+    return 0
+  fi
   product=$(oh_native_office_product) || oh_die "cannot read the installed Office product from $OH_NATIVE_PREFIX/system.reg"
   [[ $(oh_native_c2r SharedComputerLicensing 2>/dev/null) != 1 ]] || shared=1
   trap oh_native_update_end EXIT

@@ -97,6 +97,12 @@ builds are not listed; they carry the version of the next release plus a
   first start after login measured 1.8 to 2.1 s, against 5.0 to 5.4 s
   with the old prewarm. It costs about 475 MB of memory and stays off
   unless you turn it on.
+- `omarchohard native prewarm on` now also keeps one hidden Word running,
+  started as Office's COM server, and a Word launch hands off to it: its
+  window appeared in 1.1 to 1.2 s, against 1.8 to 2.1 s with Wine warm.
+  It costs about 560 MB more memory. `native update`, `native signin` and
+  the idle watcher close it the way a person closes Word, and never while
+  it shows a document.
 - The desktop VM downloads the Windows image over 16 connections
   (dockur's `CONNECTIONS`), up from dockur's default of 4.
 - OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files no
